@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skai Chocobunny | Digital Artist</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            /* --- MODO SFW (Default Pastel) --- */
+            --text-main: #5D5D5D;
+            --text-inverse: #FFFFFF;
+            --bg-body: #FFFAFB;
+            --bg-card: #FFFFFF;
+            
+            --color-primary: #FFC8DD;     /* Rosa Pastel */
+            --color-primary-dark: #FFAAC1;
+            
+            --color-secondary: #A2D2FF;   /* Celeste Pastel */
+            --color-secondary-dark: #80C0FF;
+            
+            --color-accent: #B9FBC0;      /* Verde Menta */
+            --color-accent-dark: #98FB98;
+            
+            --hero-gradient-start: var(--color-primary);
+            --hero-gradient-end: var(--color-secondary);
+        }
+
+        /* --- MODO NSFW (Dark/Red/Blue) --- */
+        body.nsfw-mode {
+            --text-main: #E0E0E0;         /* Gris claro para leer sobre negro */
+            --text-inverse: #000000;
+            --bg-body: #0a0a0a;           /* Negro casi puro */
+            --bg-card: #141414;           /* Gris muy oscuro */
+            
+            --color-primary: #8B0000;     /* Rojo Sangre Oscuro */
+            --color-primary-dark: #FF0000; /* Rojo Brillante para bordes/hover */
+            
+            --color-secondary: #00008B;   /* Azul Marino Profundo */
+            --color-secondary-dark: #1E90FF; /* Azul Eléctrico */
+            
+            --color-accent: #C62828;      /* Rojo Intenso para botones */
+            --color-accent-dark: #B71C1C; /* Rojo más oscuro para hover */
+
+            --hero-gradient-start: #2b0505; /* Negro Rojizo */
+            --hero-gradient-end: #020a24;   /* Negro Azulado */
+        }
+        
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            transition: background-color 0.5s ease, color 0.5s ease;
+        }
+        
+        .hero-gradient {
+            background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%);
+            transition: background 0.5s ease;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-bottom: 4px solid var(--color-secondary);
+            transition: transform 0.3s ease, background-color 0.5s ease, border-color 0.5s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .btn-primary {
+            background-color: var(--color-accent);
+            color: var(--text-main);
+            transition: all 0.3s ease;
+        }
+        
+        /* En modo oscuro, el texto del botón se ve mejor blanco */
+        body.nsfw-mode .btn-primary {
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: var(--color-accent-dark);
+            transform: scale(1.05);
+            box-shadow: 0 4px 15px rgba(255, 0, 0, 0.4); /* Glow rojo en nsfw */
+        }
+
+        h2, h3 { color: var(--text-main); }
+        .section-title { color: var(--color-secondary-dark); }
+        
+        /* Modal Styles */
+        #age-modal {
+            backdrop-filter: blur(8px);
+        }
+    </style>
+</head>
+<body class="antialiased">
+
+    <!-- Age Verification Modal -->
+    <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
+        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center transform scale-100 transition-transform">
+            <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
+            <h3 class="text-3xl font-bold mb-2">NSFW Content Warning</h3>
+            <p class="mb-6 text-gray-300">This section contains adult content. You must be 18 years or older to proceed.</p>
+            <div class="flex flex-col gap-3">
+                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold transition-colors">
+                    YES, I am 18+ <span class="text-xs block font-normal">(Enter Dark Mode)</span>
+                </button>
+                <button onclick="closeModal()" class="bg-transparent border border-gray-600 hover:bg-gray-800 text-gray-400 py-2 px-6 rounded-xl font-bold transition-colors">
+                    No, take me back
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="p-6 flex justify-between items-center bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
+        <div class="text-2xl font-bold flex items-center gap-2">
+            <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
+                <svg class="w-8 h-8 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M16.5,8c0-2.5-1.5-4.5-3.5-4.5c-1.5,0-2.8,1.2-3.3,2.8C9.5,6.1,9.2,6,9,6c-2.8,0-5,2.2-5,5c0,1.2,0.4,2.3,1.1,3.2 C4.4,14.9,4,15.9,4,17c0,2.2,1.8,4,4,4c0.7,0,1.3-0.2,1.9-0.5C10.5,20.8,11.2,21,12,21c3.9,0,7-3.1,7-7C19,10.9,18,8.4,16.5,8z M12,19c-0.6,0-1.1-0.1-1.6-0.4c-0.4-0.2-0.8-0.5-1.1-0.9l-0.5-0.6l-0.7,0.3c-0.6,0.2-1.2,0.4-1.8,0.3 c-0.8-0.1-1.3-0.8-1.2-1.6c0-0.4,0.2-0.8,0.5-1.1l0.6-0.6l-0.3-0.8C5.5,12.7,5.8,11.9,6.3,11.3c0.6-0.8,1.6-1.3,2.7-1.3 c0.3,0,0.7,0.1,1,0.2l0.8,0.3l0.2-0.8c0.3-1.3,1.3-2.2,2.5-2.2c1.4,0,2.5,1.3,2.5,3c0,0.3-0.1,0.6-0.2,0.9l-0.3,0.8l0.8,0.2 c1.1,0.3,2,1.1,2.5,2.1C18.9,14.6,18.8,15.8,18.4,16.8C17.3,18.5,14.8,19,12,19z"/>
+                </svg>
+            </span>
+            <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
+            <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
+        </div>
+        <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
+            <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
+            <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
+            <a href="#tos" class="hover:text-[var(--color-primary-dark)] transition-colors">TOS</a>
+            
+            <!-- NSFW Toggle Button -->
+            <button onclick="openModal()" class="border-2 border-red-400 text-red-400 hover:bg-red-400 hover:text-white px-4 py-1 rounded-full text-sm font-bold transition-all">
+                <i class="fas fa-exclamation-circle mr-1"></i> NSFW / 18+
+            </button>
+            
+            <a href="#contact" class="btn-primary px-6 py-2 rounded-full font-bold shadow-sm text-sm">Contact Me</a>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
+        <div class="absolute top-10 left-10 text-white/30 text-8xl"><i class="fas fa-heart"></i></div>
+        <div class="absolute bottom-10 right-10 text-white/30 text-8xl"><i class="fas fa-star"></i></div>
+
+        <div class="max-w-4xl mx-auto relative z-10">
+            <!-- STATUS BADGE -->
+            <div class="inline-block bg-white/20 backdrop-blur-md border border-white/40 rounded-full px-6 py-2 mb-8 text-white font-bold shadow-lg animate-pulse cursor-default">
+                <i class="fas fa-circle text-green-400 mr-2 text-xs"></i> COMMISSIONS OPEN
+            </div>
+
+            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md transition-all">Atmospheric & Painterly Furry Art</h1>
+            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
+            <div class="flex flex-wrap justify-center gap-4">
+                <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Price List</a>
+                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center">
+                    <i class="fab fa-trello mr-2"></i> Check Queue
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Portfolio -->
+    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
+        <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <!-- Art 1 -->
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
+                <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+                    <span class="text-white font-bold text-xl">View Detail</span>
+                </div>
+                <img id="img1" src="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800" alt="Art 1" class="w-full h-full object-cover transition-opacity duration-500">
+            </div>
+            <!-- Art 2 -->
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
+                 <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+                    <span class="text-white font-bold text-xl">View Detail</span>
+                </div>
+                <img id="img2" src="https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=800" alt="Art 2" class="w-full h-full object-cover transition-opacity duration-500">
+            </div>
+            <!-- Art 3 -->
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
+                 <div class="absolute inset-0 bg-[var(--color-accent)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+                    <span class="text-white font-bold text-xl">View Detail</span>
+                </div>
+                <img id="img3" src="https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&q=80&w=800" alt="Art 3" class="w-full h-full object-cover transition-opacity duration-500">
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="prices" class="bg-[var(--color-primary)]/10 py-20 px-6 transition-colors duration-500">
+        <div class="max-w-6xl mx-auto">
+            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] transition-colors">Commission Rates</h2>
+            <p id="price-subtitle" class="text-center mb-16 opacity-70">Base prices in USD. Prices may vary based on complexity.</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
+                <!-- Headshot Card -->
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
+                    <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                        <img id="ex-headshot" src="https://placehold.co/400x400/B9FBC0/5D5D5D?text=Headshot\nSFW" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+                    
+                    <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
+                    <p id="price-headshot" class="text-4xl font-black mb-6 text-[var(--color-accent-dark)] transition-all">$35+</p>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
+                    </ul>
+                </div>
+
+                <!-- Half Body Card -->
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
+                    <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
+                    
+                    <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                         <img id="ex-halfbody" src="https://placehold.co/400x533/A2D2FF/5D5D5D?text=Half+Body\nSFW" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+
+                    <h3 class="text-2xl font-bold mb-4">Half Body</h3>
+                    <p id="price-halfbody" class="text-4xl font-black mb-6 text-[var(--color-secondary)] transition-all">$60+</p>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
+                    </ul>
+                </div>
+
+                <!-- Full Body Card -->
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
+                    <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                        <img id="ex-fullbody" src="https://placehold.co/400x600/FFC8DD/5D5D5D?text=Full+Body\nSFW" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+
+                    <h3 class="text-2xl font-bold mb-4">Full Body</h3>
+                    <p id="price-fullbody" class="text-4xl font-black mb-6 text-[var(--color-primary-dark)] transition-all">$90+</p>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Calculator -->
+    <section class="py-20 px-6 max-w-3xl mx-auto">
+        <div class="card p-10 rounded-3xl shadow-lg border border-[var(--color-secondary)]/30">
+            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Your Project</h3>
+            <div class="space-y-6">
+                <div>
+                    <label class="block font-bold mb-2 opacity-80">Commission Type</label>
+                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <option value="35" id="opt-head">Headshot ($35)</option>
+                        <option value="60" id="opt-half" selected>Half Body ($60)</option>
+                        <option value="90" id="opt-full">Full Body ($90)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block font-bold mb-2 opacity-80">Background Complexity</label>
+                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <!-- PRECIOS ACTUALIZADOS A $10 y $40 -->
+                        <option value="10">Simple (gradient colors) ($10)</option>
+                        <option value="40">Complex (environment, settings, etc) ($40)</option>
+                        <option value="50">Full Cinematic ($50)</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl">
+                    <input type="checkbox" id="extra" class="w-6 h-6 accent-[var(--color-primary)]" onchange="calculate()">
+                    <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
+                </div>
+                
+                <!-- Total Estimate + Action Buttons -->
+                <div class="pt-8 border-t border-dashed border-gray-400/30">
+                    <div class="flex justify-between items-center text-3xl font-black mb-8">
+                        <span class="opacity-80">Total Estimate:</span>
+                        <span id="total" class="text-[var(--color-accent-dark)]">$60</span>
+                    </div>
+                    
+                    <!-- Integrated Action Buttons -->
+                    <div class="flex flex-col md:flex-row gap-4 justify-center">
+                         <!-- CALLS GO TO FORM FUNCTION -->
+                         <button onclick="goToForm(event)" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
+                            <i class="fas fa-clipboard-check"></i> Fill Order Form
+                        </button>
+                        <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
+                            <i class="fab fa-trello"></i> Check Queue
+                        </a>
+                    </div>
+                    
+                    <!-- Human Connection Link -->
+                    <p class="text-center mt-6 text-sm opacity-70">
+                        Is this process too formal for you? Don't worry! <br>
+                        <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- TOS -->
+    <section id="tos" class="py-20 px-6 relative bg-[var(--bg-card)]">
+        <div class="max-w-4xl mx-auto relative z-10">
+            <h2 class="text-4xl font-bold mb-12 text-center text-[var(--color-secondary-dark)]">Terms of Service</h2>
+            <div class="grid md:grid-cols-2 gap-12">
+                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
+                    <h4 class="text-xl font-bold mb-4 text-[var(--color-primary-dark)]"><i class="fas fa-user-shield mr-2"></i> General Rules</h4>
+                    <ul class="space-y-2 opacity-80 text-sm">
+                        <li>• Payment via PayPal only (USD).</li>
+                        <li>• 50% or 100% upfront payment.</li>
+                        <li>• I have the right to refuse any request.</li>
+                    </ul>
+                </div>
+                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
+                    <h4 class="text-xl font-bold mb-4 text-[var(--color-secondary-dark)]"><i class="fas fa-paint-brush mr-2"></i> Content Rules</h4>
+                    <ul class="space-y-2 opacity-80 text-sm">
+                        <li>• For personal use only.</li>
+                        <li>• Do not claim the art as your own.</li>
+                        <li>• <b class="text-[var(--color-accent)]">NSFW available via button above.</b></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section id="contact" class="py-20 px-6 text-center bg-gradient-to-b from-[var(--bg-body)] to-[var(--color-secondary)]/10">
+        <h2 class="text-4xl font-bold mb-8 text-[var(--text-main)]">Ready to start?</h2>
+        <p class="text-xl mb-8 opacity-70 max-w-2xl mx-auto">Please fill out the form above or send me a DM. I usually reply within 24 hours.</p>
+        
+        <div class="flex justify-center gap-6 flex-wrap">
+            <button onclick="goToForm(event)" class="btn-primary px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 cursor-pointer">
+                <i class="fas fa-clipboard-list"></i> Order Now
+            </button>
+            <a href="https://twitter.com" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 transition-colors">
+                <i class="fab fa-twitter"></i> Twitter DM
+            </a>
+        </div>
+    </section>
+
+    <footer class="py-10 bg-[var(--color-secondary-dark)] text-white text-center">
+        <p class="font-medium opacity-90">© 2024 Skai Chocobunny Art. All rights reserved.</p>
+    </footer>
+
+    <script>
+        let isNSFW = false;
+
+        function openModal() {
+            if (isNSFW) {
+                toggleMode(false);
+            } else {
+                document.getElementById('age-modal').classList.remove('hidden');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('age-modal').classList.add('hidden');
+        }
+
+        function confirmNSFW() {
+            closeModal();
+            toggleMode(true);
+        }
+
+        function toggleMode(nsfw) {
+            isNSFW = nsfw;
+            const body = document.body;
+            
+            if (nsfw) {
+                // Activate Dark Mode / NSFW
+                body.classList.add('nsfw-mode');
+                
+                document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
+                document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
+                document.getElementById('price-subtitle').innerText = "NSFW Rates (Includes +18 tax & privacy).";
+                
+                document.getElementById('img1').src = "https://placehold.co/800x1000/1a0505/red?text=NSFW+Art+1";
+                document.getElementById('img2').src = "https://placehold.co/800x1000/050a1a/blue?text=NSFW+Art+2";
+                document.getElementById('img3').src = "https://placehold.co/800x1000/222/crimson?text=NSFW+Art+3";
+
+                document.getElementById('ex-headshot').src = "https://placehold.co/400x400/330000/red?text=NSFW\nHead";
+                document.getElementById('ex-halfbody').src = "https://placehold.co/400x533/000033/blue?text=NSFW\nBody";
+                document.getElementById('ex-fullbody').src = "https://placehold.co/400x600/111/white?text=NSFW\nFull";
+
+                document.getElementById('price-headshot').innerText = "$50+";
+                document.getElementById('price-halfbody').innerText = "$80+";
+                document.getElementById('price-fullbody').innerText = "$120+";
+                
+                // Update Calculator Values for NSFW
+                document.getElementById('opt-head').innerText = "Headshot ($50)";
+                document.getElementById('opt-head').value = 50;
+                document.getElementById('opt-half').innerText = "Half Body ($80)";
+                document.getElementById('opt-half').value = 80;
+                document.getElementById('opt-full').innerText = "Full Body ($120)";
+                document.getElementById('opt-full').value = 120;
+
+                document.getElementById('feat-1').innerText = "Expressions / Blush";
+                document.getElementById('feat-2').innerText = "Lingerie / Nude";
+                document.getElementById('feat-3').innerText = "Anatomy Details";
+
+            } else {
+                // Revert to SFW
+                body.classList.remove('nsfw-mode');
+                
+                document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
+                document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
+                document.getElementById('price-subtitle').innerText = "Base prices in USD. Prices may vary based on complexity.";
+
+                document.getElementById('img1').src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80&w=800";
+                document.getElementById('img2').src = "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&q=80&w=800";
+                document.getElementById('img3').src = "https://images.unsplash.com/photo-1633356122544-f134324a6cee?auto=format&fit=crop&q=80&w=800";
+
+                document.getElementById('ex-headshot').src = "https://placehold.co/400x400/B9FBC0/5D5D5D?text=Headshot\nSFW";
+                document.getElementById('ex-halfbody').src = "https://placehold.co/400x533/A2D2FF/5D5D5D?text=Half+Body\nSFW";
+                document.getElementById('ex-fullbody').src = "https://placehold.co/400x600/FFC8DD/5D5D5D?text=Full+Body\nSFW";
+
+                document.getElementById('price-headshot').innerText = "$35+";
+                document.getElementById('price-halfbody').innerText = "$60+";
+                document.getElementById('price-fullbody').innerText = "$90+";
+
+                // Update Calculator Values for SFW
+                document.getElementById('opt-head').innerText = "Headshot ($35)";
+                document.getElementById('opt-head').value = 35;
+                document.getElementById('opt-half').innerText = "Half Body ($60)";
+                document.getElementById('opt-half').value = 60;
+                document.getElementById('opt-full').innerText = "Full Body ($90)";
+                document.getElementById('opt-full').value = 90;
+
+                document.getElementById('feat-1').innerText = "Full shading";
+                document.getElementById('feat-2').innerText = "Detailed outfit";
+                document.getElementById('feat-3').innerText = "Ref Sheet Ready";
+            }
+            
+            calculate();
+        }
+
+        function calculate() {
+            const base = parseFloat(document.getElementById('type').value);
+            const bg = parseFloat(document.getElementById('bg').value);
+            const extraChar = document.getElementById('extra').checked;
+            
+            let total = base + bg;
+            if (extraChar) {
+                total += (base * 0.5);
+            }
+            
+            document.getElementById('total').innerText = '$' + total.toFixed(0);
+        }
+
+        // --- PRE-FILLED GOOGLE FORM LOGIC ---
+        function goToForm(e) {
+            e.preventDefault();
+
+            // 1. CONFIGURACIÓN SFW (FORMULARIO NORMAL)
+            // ----------------------------------------
+            const SFW_CONFIG = {
+                formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", 
+                entryType: "entry.1834269951", 
+                entryBg: "entry.2050602513",   
+                entryExtra: "entry.941872474"  
+            };
+
+            // 2. CONFIGURACIÓN NSFW (FORMULARIO +18)
+            // --------------------------------------
+            // Cuando crees el form NSFW, obtén el enlace igual que hicimos hoy 
+            // y reemplaza los "..." y "111..." de aquí abajo.
+            const NSFW_CONFIG = {
+                formID: "1FAIpQLSd...", 
+                entryType: "entry.111111111", 
+                entryBg: "entry.222222222",
+                entryExtra: "entry.333333333"
+            };
+
+            // Detectar cuál usar
+            const config = isNSFW ? NSFW_CONFIG : SFW_CONFIG;
+            const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
+
+            // 3. Obtener valores
+            const typeVal = document.getElementById('type').value;
+            const bgVal = document.getElementById('bg').value;
+            const extraChar = document.getElementById('extra').checked;
+
+            // 4. Traducir valores a texto entendible (Mapeo exacto a tus Formularios)
+            let typeText = "";
+            let bgText = "";
+            let extraText = extraChar ? "Yes (+1 Character)" : "No."; // Coincide con tu imagen
+
+            if (!isNSFW) {
+                // TEXTOS SFW (Deben ser IDÉNTICOS al formulario SFW)
+                if(typeVal == "35") typeText = "Headshot ($35)";
+                if(typeVal == "60") typeText = "Half Body ($60)";
+                if(typeVal == "90") typeText = "Full Body ($90)";
+
+                // TEXTOS FONDO SFW - ACTUALIZADOS PARA COINCIDIR CON LOS NUEVOS VALORES
+                if(bgVal == "10") bgText = "Simple (gradient colors)"; // AHORA ES VALOR 10
+                if(bgVal == "40") bgText = "Complex (environment, settings, etc)"; // AHORA ES VALOR 40
+                if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; // Full Cinematic sigue enviando Complex
+
+            } else {
+                // TEXTOS NSFW (Deben ser IDÉNTICOS al formulario NSFW)
+                if(typeVal == "50") typeText = "NSFW Headshot ($50)";
+                if(typeVal == "80") typeText = "NSFW Half Body ($80)";
+                if(typeVal == "120") typeText = "NSFW Full Body ($120)";
+
+                // TEXTOS FONDO NSFW
+                if(bgVal == "10") bgText = "Simple (gradient colors)";
+                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
+                if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
+            }
+
+            // 5. Construir URL
+            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
+
+            // 6. Abrir
+            if (config.formID.includes("...")) {
+                alert("¡Falta configurar los IDs! Edita el código HTML y pon los IDs reales de tus formularios.");
+            } else {
+                window.open(finalURL, '_blank');
+            }
+        }
+    </script>
+</body>
+</html>
