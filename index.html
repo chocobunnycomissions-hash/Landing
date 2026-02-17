@@ -1,23 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skai Chocobunny | Digital Artist</title>
     
-    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_simple.svg">
+    <!-- FAVICON -->
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
 
+    <!-- ESTILOS Y FUENTES -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <!-- FIREBASE, CHAT & STORAGE MODULE -->
+    <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
-        // --- 1. CONFIGURACIÓN DE FIREBASE (Skai Chat) ---
+        // --- ⚙️ CONFIGURACIÓN DE FIREBASE (ORIGINAL) ---
         const firebaseConfig = {
             apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
             authDomain: "skai-chat-4eeab.firebaseapp.com",
@@ -28,54 +30,40 @@
             measurementId: "G-7Z3XTYL288"
         };
 
-        // --- 2. CONFIGURACIÓN DE SEGURIDAD (Tú eres el único admin) ---
-        const ADMIN_UID = "6lYsULY3Opci9OHviBdZbedCrKn1"; 
+        // --- 🔐 TU NUEVO UID DE ADMIN ---
+        const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
         
-        // --- 3. WEBHOOK DE GOOGLE SCRIPT (Notificaciones) ---
+        // --- WEBHOOK DE GOOGLE SCRIPT ---
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
 
-        // Inicializar Servicios
+        // Inicializar
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
         const storage = getStorage(app);
 
-        // Variables Globales
         let currentUser = null;
         let currentChatId = null;
-        
-        // Elementos UI
-        const chatWindow = document.getElementById('chat-window');
-        const chatMessages = document.getElementById('chat-messages');
-        const chatInput = document.getElementById('chat-input');
-        const adminPanel = document.getElementById('admin-chat-panel');
-        const loginModal = document.getElementById('admin-login-modal');
-        const portfolioGrid = document.getElementById('portfolio-grid');
 
-        // Detectar si estamos intentando entrar al modo admin
-        const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
-
-        // --- SISTEMA DE AUTENTICACIÓN (LÓGICA CORREGIDA) ---
+        // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
+            const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
 
             if (user) {
-                // HAY UN USUARIO CONECTADO
+                // Si el usuario conectado coincide con tu NUEVO UID
                 if (user.uid === ADMIN_UID) {
-                    // CASO 1: Eres el Admin real
                     if (wantsAdmin) {
-                        loginModal.classList.add('hidden'); 
+                        document.getElementById('admin-login-modal').classList.add('hidden');
                         initAdminPanel();
                     }
                 } else {
-                    // CASO 2: Eres un cliente (o tú mismo disfrazado de cliente anónimo)
+                    // Si no eres tú, es un cliente (o tú antes de loguearte)
                     if (wantsAdmin) {
-                        // ¡AQUÍ ESTABA EL ERROR! 
-                        // Si pides admin pero eres cliente, forzamos mostrar el login
-                        // para que puedas cambiar de cuenta.
+                        // Si intentas entrar como admin pero no estás logueado como tal, muestra el login
                         document.getElementById('admin-login-modal').classList.remove('hidden');
                     } else {
-                        // Si no pides admin, carga el chat normal
+                        // Flujo normal de cliente
                         const savedChatId = localStorage.getItem('skai_chat_id');
                         if (savedChatId) {
                             currentChatId = savedChatId;
@@ -84,13 +72,11 @@
                     }
                 }
             } else {
-                // NADIE CONECTADO
+                // Nadie conectado
                 if (wantsAdmin) {
-                    // Si pides admin, muestra login
                     document.getElementById('admin-login-modal').classList.remove('hidden');
                 } else {
-                    // Si no, te convierte en cliente anónimo
-                    signInAnonymously(auth).catch(e => console.error(e));
+                    signInAnonymously(auth);
                 }
             }
         });
@@ -100,15 +86,12 @@
             const grid = document.getElementById('portfolio-grid');
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
-                // Limpiamos solo los dinámicos para no duplicar
                 const existingDynamic = document.querySelectorAll('.dynamic-item');
                 existingDynamic.forEach(e => e.remove());
 
-                // Mantenemos referencia a los estáticos
                 const staticItems = Array.from(document.querySelectorAll('.static-portfolio-item'));
                 grid.innerHTML = ''; 
 
-                // 1. Añadir dinámicos (nuevos de Firebase)
                 snapshot.forEach((doc) => {
                     const item = doc.data();
                     const div = document.createElement('div');
@@ -122,13 +105,12 @@
                     grid.appendChild(div);
                 });
 
-                // 2. Volver a poner los estáticos al final
                 staticItems.forEach(item => grid.appendChild(item));
             });
         }
         loadPortfolio();
 
-        // --- FUNCIONES ADMIN (Login/Upload) ---
+        // --- FUNCIONES ADMIN ---
         window.loginAdmin = async () => {
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
@@ -137,8 +119,9 @@
             btn.innerText = "Verificando...";
             
             try {
+                // Esto iniciará sesión con tu nuevo usuario
                 await signInWithEmailAndPassword(auth, email, pass);
-                // Si funciona, onAuthStateChanged se disparará de nuevo y cargará el panel
+                // Si funciona, onAuthStateChanged detectará tu UID y abrirá el panel
             } catch (e) { 
                 alert("Error de acceso: " + e.message); 
                 btn.innerText = "Entrar";
@@ -183,16 +166,7 @@
                     const chat = docSnap.data();
                     const div = document.createElement('div');
                     div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
-                    
-                    let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
-
-                    div.innerHTML = `
-                        <div class="flex justify-between">
-                            <span class="font-bold text-gray-700">${chat.clientName}</span>
-                            <span class="text-xs text-gray-400">${time}</span>
-                        </div>
-                        <p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>
-                    `;
+                    div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
                     div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
                     list.appendChild(div);
                 });
@@ -288,18 +262,16 @@
             const sendAdmin = async () => {
                 const txt = adminInput.value.trim();
                 if(txt) { 
-                    // Enviar como Admin
                     await addDoc(collection(db, "chats", currentChatId, "messages"), {
                         text: txt,
                         senderId: currentUser.uid,
                         senderName: "Skai",
                         timestamp: serverTimestamp()
                     });
-                    // Actualizar ultimo mensaje
                     await setDoc(doc(db, "chats", currentChatId), {
                         lastMessage: txt,
                         lastMessageTime: serverTimestamp(),
-                        unread: false // Leído porque respondiste tú
+                        unread: false 
                     }, { merge: true });
                     
                     adminInput.value = ''; 
@@ -312,13 +284,11 @@
             });
         }
 
-        // Logout
         window.logoutAdmin = async () => { 
             await signOut(auth); 
-            window.location.href = window.location.pathname; // Recargar página limpia
+            window.location.href = window.location.pathname; 
         }
 
-        // Chat Input Enter
         document.getElementById('chat-input').addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
 
     </script>
@@ -410,7 +380,6 @@
     <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
-                <!-- TU LOGO RECUPERADO -->
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
                     <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
                 </span>
@@ -418,7 +387,7 @@
                 <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
             </div>
             
-            <button class="md:hidden text-[var(--text-main)] focus:outline-none" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
+            <button class="md:hidden text-[var(--text-main)]" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
 
             <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
                 <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
@@ -556,6 +525,7 @@
                 <div>
                     <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
                     <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
@@ -612,8 +582,10 @@
         <div class="flex-1 p-0 flex relative">
             <!-- CHAT TAB -->
             <div id="admin-chat-section" class="flex-1 flex flex-col">
+                <!-- Chat List Sidebar -->
                 <div class="flex h-full">
                     <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
+                    <!-- Chat Area -->
                     <div class="flex-1 flex flex-col">
                         <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
                         <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
@@ -740,38 +712,75 @@
             document.getElementById('total').innerText = '$' + total.toFixed(0);
         }
 
+        // --- PRE-FILLED GOOGLE FORM LOGIC ---
         function goToForm(e) {
             e.preventDefault();
-            const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
-            const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
+
+            // 1. CONFIGURACIÓN SFW (FORMULARIO NORMAL)
+            // ----------------------------------------
+            const SFW_CONFIG = {
+                formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", 
+                entryType: "entry.1834269951", 
+                entryBg: "entry.2050602513",   
+                entryExtra: "entry.941872474"  
+            };
+
+            // 2. CONFIGURACIÓN NSFW (FORMULARIO +18)
+            // --------------------------------------
+            const NSFW_CONFIG = {
+                formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW",  // <--- ¡FALTA ESTO!
+                entryType: "entry.PON_AQUI_EL_NUMERO",     // <--- ¡FALTA ESTO!
+                entryBg: "entry.PON_AQUI_EL_NUMERO",       // <--- ¡FALTA ESTO!
+                entryExtra: "entry.PON_AQUI_EL_NUMERO"     // <--- ¡FALTA ESTO!
+            };
+
+            // Detectar cuál usar
             const config = isNSFW ? NSFW_CONFIG : SFW_CONFIG;
             const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
 
+            // 3. Obtener valores
             const typeVal = document.getElementById('type').value;
             const bgVal = document.getElementById('bg').value;
             const extraChar = document.getElementById('extra').checked;
 
-            let typeText = "", bgText = "";
+            // 4. Traducir valores a texto entendible (Mapeo exacto a tus Formularios)
+            let typeText = "";
+            let bgText = "";
             let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
 
             if (!isNSFW) {
+                // TEXTOS SFW (Deben ser IDÉNTICOS al formulario SFW)
+                // ¡IMPORTANTE! Asegúrate de que las opciones en tu formulario SFW tengan estos nombres ahora:
                 if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
                 if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
                 if(typeVal == "65") typeText = "Full Body ($65) [PROMO]";
+
+                // TEXTOS FONDO SFW
                 if(bgVal == "10") bgText = "Simple (gradient colors)";
                 if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
                 if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; 
+
             } else {
+                // TEXTOS NSFW (Deben ser IDÉNTICOS al formulario NSFW)
                 if(typeVal == "35") typeText = "NSFW Headshot ($35) [PROMO]";
                 if(typeVal == "55") typeText = "NSFW Half Body ($55) [PROMO]";
                 if(typeVal == "85") typeText = "NSFW Full Body ($85) [PROMO]";
+
+                // TEXTOS FONDO NSFW
                 if(bgVal == "10") bgText = "Simple (gradient colors)";
                 if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
                 if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
             }
 
+            // 5. Construir URL
             const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
-            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
+
+            // 6. Abrir
+            if (config.formID.includes("PON_AQUI")) {
+                alert("¡Falta configurar el formulario NSFW! Pero el SFW funciona perfecto.");
+            } else {
+                window.open(finalURL, '_blank');
+            }
         }
 
         // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
