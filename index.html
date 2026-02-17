@@ -4,9 +4,256 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skai Chocobunny | Digital Artist</title>
-    <link rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
+    
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_simple.svg">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- MÓDULO DE CHAT Y FIREBASE -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        // --- ⚙️ TU CONFIGURACIÓN REAL DE FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
+            authDomain: "skai-chat-4eeab.firebaseapp.com",
+            projectId: "skai-chat-4eeab",
+            storageBucket: "skai-chat-4eeab.firebasestorage.app",
+            messagingSenderId: "881808601018",
+            appId: "1:881808601018:web:a0c47a21765bb3fdda7783",
+            measurementId: "G-7Z3XTYL288"
+        };
+
+        // URL DE TU SCRIPT PARA NOTIFICACIONES DE CORREO
+        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec"; 
+
+        // Inicializar Firebase
+        let db, auth;
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            console.log("🔥 Firebase Conectado: Skai Chat");
+        } catch (e) { 
+            console.error("Error inicializando Firebase:", e); 
+        }
+
+        // --- VARIABLES DEL CHAT ---
+        const chatWindow = document.getElementById('chat-window');
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const adminPanel = document.getElementById('admin-chat-panel');
+        const adminList = document.getElementById('admin-chat-list');
+        const chatAdminTitle = document.getElementById('chat-admin-title');
+        
+        let currentUser = null;
+        let currentChatId = null;
+        // Detecta modo admin si la URL termina en ?mode=admin
+        let isAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+
+        // --- AUTENTICACIÓN ---
+        if (auth) {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    currentUser = user;
+                    if (isAdmin) {
+                        initAdminView();
+                    } else {
+                        const savedChatId = localStorage.getItem('skai_chat_id');
+                        if (savedChatId) {
+                            currentChatId = savedChatId;
+                            listenToChat(currentChatId);
+                        }
+                    }
+                } else {
+                    signInAnonymously(auth).catch((error) => console.error("Error Auth:", error));
+                }
+            });
+        }
+
+        // --- FUNCIONES DEL CHAT (CLIENTE) ---
+        window.toggleChat = function() {
+            chatWindow.classList.toggle('hidden');
+            // Mensaje de bienvenida PERSONAL (No Bot)
+            if (!chatWindow.classList.contains('hidden') && !currentChatId && !isAdmin) {
+                if (chatMessages.children.length === 0) {
+                    addMessageToUI("Skai Chocobunny", "Hi! 👋 Thanks for reaching out. Let me know what you have in mind for your commission!", false);
+                }
+            }
+        }
+
+        window.sendMessage = async function(customText = null) {
+            const text = customText || chatInput.value.trim();
+            if (!text || !currentUser || !db) return;
+
+            // 1. CREAR SESIÓN NUEVA EN LA BASE DE DATOS
+            if (!currentChatId && !isAdmin) {
+                try {
+                    const chatRef = await addDoc(collection(db, "chats"), {
+                        clientName: "Guest " + currentUser.uid.slice(0,4),
+                        createdAt: serverTimestamp(),
+                        lastMessage: text,
+                        lastMessageTime: serverTimestamp(),
+                        unread: true
+                    });
+                    currentChatId = chatRef.id;
+                    localStorage.setItem('skai_chat_id', currentChatId);
+                    
+                    // Si viene del modal de pedido, enviamos notificación con el email del cliente
+                    if (customText && window.clientEmailForNotify) {
+                        sendEmailNotification(text, currentChatId, window.clientEmailForNotify);
+                    } else {
+                        // Notificación genérica si escribe directo al chat
+                        sendEmailNotification(text, currentChatId, "No email provided (Direct Chat)");
+                    }
+                    
+                    listenToChat(currentChatId);
+                } catch (e) { console.error("Error creando chat:", e); }
+            }
+
+            // 2. GUARDAR MENSAJE
+            try {
+                if (currentChatId) {
+                    await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                        text: text,
+                        senderId: currentUser.uid,
+                        senderName: isAdmin ? "Skai Chocobunny" : "Client",
+                        timestamp: serverTimestamp()
+                    });
+
+                    await setDoc(doc(db, "chats", currentChatId), {
+                        lastMessage: text,
+                        lastMessageTime: serverTimestamp(),
+                        unread: !isAdmin 
+                    }, { merge: true });
+
+                    if (!customText) chatInput.value = "";
+                }
+            } catch (e) { console.error("Error enviando:", e); }
+        }
+
+        function listenToChat(chatId) {
+            const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
+            onSnapshot(q, (snapshot) => {
+                chatMessages.innerHTML = '';
+                snapshot.forEach((doc) => {
+                    const msg = doc.data();
+                    const isMe = msg.senderId === currentUser.uid;
+                    const displayName = msg.senderName === "Skai Chocobunny" ? "Skai Chocobunny" : "You";
+                    addMessageToUI(displayName, msg.text, isMe);
+                });
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            });
+        }
+
+        function addMessageToUI(sender, text, isMe) {
+            const div = document.createElement('div');
+            div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3`;
+            const bubbleClass = isMe 
+                ? 'bg-[var(--color-secondary)] text-white rounded-br-none' 
+                : 'bg-gray-100 text-gray-800 rounded-bl-none';
+
+            div.innerHTML = `
+                <div class="${bubbleClass} px-4 py-2 rounded-2xl max-w-[85%] shadow-sm text-sm break-words">
+                    ${text}
+                </div>
+                <span class="text-[10px] text-gray-400 mt-1 px-1">${sender}</span>
+            `;
+            chatMessages.appendChild(div);
+        }
+
+        // --- MODO ADMIN ---
+        function initAdminView() {
+            document.getElementById('chat-trigger-btn').classList.add('hidden');
+            adminPanel.classList.remove('hidden');
+
+            const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
+            onSnapshot(q, (snapshot) => {
+                adminList.innerHTML = '';
+                snapshot.forEach((docSnap) => {
+                    const chat = docSnap.data();
+                    const div = document.createElement('div');
+                    div.className = `p-4 border-b hover:bg-gray-50 cursor-pointer transition-colors ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
+                    
+                    let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
+
+                    div.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <h4 class="font-bold text-sm text-gray-700">${chat.clientName || 'Guest'}</h4>
+                            <span class="text-[10px] text-gray-400">${time}</span>
+                        </div>
+                        <p class="text-xs text-gray-500 truncate mt-1">${chat.lastMessage}</p>
+                    `;
+                    div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
+                    adminList.appendChild(div);
+                });
+            });
+        }
+
+        window.loadAdminChat = function(chatId, clientName) {
+            currentChatId = chatId;
+            chatAdminTitle.innerText = "Chatting with: " + (clientName || 'Guest');
+            const adminMsgArea = document.getElementById('admin-messages-area');
+            const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
+            
+            onSnapshot(q, (snapshot) => {
+                adminMsgArea.innerHTML = '';
+                snapshot.forEach((doc) => {
+                    const msg = doc.data();
+                    const isMe = msg.senderId === currentUser.uid;
+                    const div = document.createElement('div');
+                    div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3`;
+                    div.innerHTML = `
+                        <div class="${isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-white border border-gray-200 text-gray-800'} px-4 py-2 rounded-2xl max-w-[70%] shadow-sm text-sm">${msg.text}</div>
+                        <span class="text-[10px] text-gray-400 mt-1">${isMe ? 'You' : 'Client'}</span>
+                    `;
+                    adminMsgArea.appendChild(div);
+                });
+                adminMsgArea.scrollTop = adminMsgArea.scrollHeight;
+            });
+
+            const adminInput = document.getElementById('admin-chat-input');
+            const adminSendBtn = document.getElementById('admin-send-btn');
+            
+            const sendAdminMsg = async () => {
+                const text = adminInput.value.trim();
+                if(!text) return;
+                await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                    text: text,
+                    senderId: currentUser.uid,
+                    senderName: "Skai Chocobunny",
+                    timestamp: serverTimestamp()
+                });
+                await setDoc(doc(db, "chats", currentChatId), { lastMessage: text, lastMessageTime: serverTimestamp(), unread: false }, { merge: true });
+                adminInput.value = "";
+            };
+            adminSendBtn.onclick = sendAdminMsg;
+            adminInput.onkeypress = (e) => { if(e.key === 'Enter') sendAdminMsg(); };
+        }
+
+        // --- NOTIFICACIONES ---
+        function sendEmailNotification(message, chatId, email) {
+            fetch(NOTIFICATION_WEBHOOK, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'chat_order',
+                    message: message,
+                    chatId: chatId,
+                    email: email 
+                })
+            }).catch(err => console.log("Error notificación", err));
+        }
+
+        chatInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') window.sendMessage();
+        });
+    </script>
+
     <style>
         :root {
             /* --- MODO SFW (Default Pastel) --- */
@@ -76,7 +323,6 @@
             transition: all 0.3s ease;
         }
         
-        /* En modo oscuro, el texto del botón se ve mejor blanco */
         body.nsfw-mode .btn-primary {
             color: white;
         }
@@ -84,18 +330,16 @@
         .btn-primary:hover {
             background-color: var(--color-accent-dark);
             transform: scale(1.05);
-            box-shadow: 0 4px 15px rgba(255, 0, 0, 0.4); /* Glow rojo en nsfw */
+            box-shadow: 0 4px 15px rgba(255, 0, 0, 0.4); 
         }
 
         h2, h3 { color: var(--text-main); }
         .section-title { color: var(--color-secondary-dark); }
         
-        /* Modal Styles */
-        #age-modal {
+        #age-modal, #order-summary-modal {
             backdrop-filter: blur(8px);
         }
         
-        /* Mobile Menu */
         #mobile-menu {
             transition: max-height 0.3s ease-in-out;
             max-height: 0;
@@ -104,9 +348,12 @@
         #mobile-menu.open {
             max-height: 300px;
         }
+
+        .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     </style>
 </head>
-<body class="antialiased">
+<body class="antialiased relative">
 
     <!-- Age Verification Modal -->
     <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
@@ -125,24 +372,68 @@
         </div>
     </div>
 
+    <!-- ORDER SUMMARY MODAL -->
+    <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
+        <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
+            <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
+            
+            <h3 class="text-3xl font-bold mb-4 text-center text-[var(--color-secondary-dark)]">Review Order</h3>
+            
+            <div class="bg-gray-50 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100">
+                <div class="flex justify-between">
+                    <span class="font-bold text-gray-600">Commission Type:</span>
+                    <span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="font-bold text-gray-600">Background:</span>
+                    <span id="modal-bg">Simple</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="font-bold text-gray-600">Extra Character:</span>
+                    <span id="modal-extra">No</span>
+                </div>
+                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black">
+                    <span>Total Estimate:</span>
+                    <span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span>
+                </div>
+            </div>
+
+            <!-- Email Input -->
+            <div class="mb-6">
+                <label class="block font-bold text-sm mb-2 text-gray-600">Your Email <span class="text-red-400">*</span></label>
+                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3 focus:outline-none focus:border-[var(--color-secondary)] transition-colors">
+                <p class="text-xs text-gray-400 mt-1">Required to send you the order confirmation and queue status.</p>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition-colors border border-gray-200">
+                    <i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i>
+                    <span class="text-sm">Google Form</span>
+                </button>
+                <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition-colors shadow-lg">
+                    <i class="fas fa-comments text-xl"></i>
+                    <span class="text-sm">Discuss in Chat</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Navigation -->
     <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
-                <!-- LOGO DESDE ASSETS (Reemplazo del SVG inline) -->
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
-<!-- Agregamos la clase 'mix-blend-screen' -->
-<img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen">                </span>
+                    <img src="assets/logo_simple.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen">
+                </span>
                 <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
                 <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
             </div>
             
-            <!-- Mobile Menu Button -->
             <button class="md:hidden text-[var(--text-main)] focus:outline-none" onclick="toggleMenu()">
                 <i class="fas fa-bars text-2xl"></i>
             </button>
 
-            <!-- Desktop Menu -->
             <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
                 <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
                 <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
@@ -154,7 +445,6 @@
             </div>
         </div>
 
-        <!-- Mobile Dropdown -->
         <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-gray-500 text-center border-t border-gray-100 mt-4">
             <a href="#portfolio" class="hover:text-[var(--color-primary-dark)]">Portfolio</a>
             <a href="#prices" class="hover:text-[var(--color-primary-dark)]">Prices</a>
@@ -170,7 +460,6 @@
         <div class="absolute bottom-10 right-10 text-white/30 text-8xl"><i class="fas fa-star"></i></div>
 
         <div class="max-w-4xl mx-auto relative z-10">
-            <!-- STATUS BADGE WITH SALE -->
             <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
                 <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
             </div>
@@ -190,28 +479,22 @@
     <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
         <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <!-- Art 1 -->
             <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
                 <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
                     <span class="text-white font-bold text-xl">View Detail</span>
                 </div>
-                <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                 <img id="img1" src="assets/art1.jpg" alt="Art 1" class="w-full h-full object-cover transition-opacity duration-500">
             </div>
-            <!-- Art 2 -->
             <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
                  <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
                     <span class="text-white font-bold text-xl">View Detail</span>
                 </div>
-                <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                 <img id="img2" src="assets/art2.jpg" alt="Art 2" class="w-full h-full object-cover transition-opacity duration-500">
             </div>
-            <!-- Art 3 -->
             <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
                  <div class="absolute inset-0 bg-[var(--color-accent)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
                     <span class="text-white font-bold text-xl">View Detail</span>
                 </div>
-                <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                 <img id="img3" src="assets/art3.jpg" alt="Art 3" class="w-full h-full object-cover transition-opacity duration-500">
             </div>
         </div>
@@ -227,13 +510,10 @@
             </p>
             
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-                <!-- Headshot Card -->
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
                     <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                         <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-                    
                     <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
                     <div id="price-headshot" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$35</span>
@@ -241,20 +521,16 @@
                     </div>
                     <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
                         <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Painterly Style</li>
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
                         <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
                     </ul>
                 </div>
 
-                <!-- Half Body Card -->
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
                     <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
-                    
                     <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                          <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-
                     <h3 class="text-2xl font-bold mb-4">Half Body</h3>
                     <div id="price-halfbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$60</span>
@@ -262,18 +538,15 @@
                     </div>
                     <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
                         <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Painterly Style</li>
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
                         <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
                     </ul>
                 </div>
 
-                <!-- Full Body Card -->
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
                     <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                         <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-
                     <h3 class="text-2xl font-bold mb-4">Full Body</h3>
                     <div id="price-fullbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$90</span>
@@ -282,7 +555,7 @@
                     <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
                         <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
                         <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Painterly Style</span></li>
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
                     </ul>
                 </div>
             </div>
@@ -297,7 +570,6 @@
                 <div>
                     <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
                     <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
@@ -316,17 +588,14 @@
                     <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
                 </div>
                 
-                <!-- Total Estimate + Action Buttons -->
                 <div class="pt-8 border-t border-dashed border-gray-400/30">
                     <div class="flex justify-between items-center text-3xl font-black mb-8">
                         <span class="opacity-80">Total Estimate:</span>
                         <span id="total" class="text-[var(--color-accent-dark)]">$55</span>
                     </div>
                     
-                    <!-- Integrated Action Buttons -->
                     <div class="flex flex-col md:flex-row gap-4 justify-center">
-                         <!-- CALLS GO TO FORM FUNCTION -->
-                         <button onclick="goToForm(event)" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
+                         <button onclick="openOrderModal()" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
                             <i class="fas fa-clipboard-check"></i> Fill Order Form
                         </button>
                         <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
@@ -334,7 +603,6 @@
                         </a>
                     </div>
                     
-                    <!-- Human Connection Link -->
                     <p class="text-center mt-6 text-sm opacity-70">
                         Is this process too formal for you? Don't worry! <br>
                         <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
@@ -363,7 +631,6 @@
                         <li>• For personal use only.</li>
                         <li>• Do not claim the art as your own.</li>
                         <li>• <b class="text-[var(--color-accent)]">NSFW available via button above.</b></li>
-                        <!-- NUEVA REGLA AGREGADA -->
                         <li>• <b>No Mechas / Robots.</b></li>
                     </ul>
                 </div>
@@ -377,7 +644,7 @@
         <p class="text-xl mb-8 opacity-70 max-w-2xl mx-auto">Please fill out the form above or send me a DM. I usually reply within 24 hours.</p>
         
         <div class="flex justify-center gap-6 flex-wrap">
-            <button onclick="goToForm(event)" class="btn-primary px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 cursor-pointer">
+            <button onclick="openOrderModal()" class="btn-primary px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 cursor-pointer">
                 <i class="fas fa-clipboard-list"></i> Order Now
             </button>
             <a href="https://twitter.com" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 transition-colors">
@@ -390,57 +657,92 @@
         <p class="font-medium opacity-90">© 2024 Skai Chocobunny Art. All rights reserved.</p>
     </footer>
 
+    <!-- CLIENT CHAT UI -->
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
+        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform border-2 border-white">
+            <i class="fas fa-comment-dots text-2xl"></i>
+        </div>
+    </div>
+
+    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
+        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-robot"></i>
+                <span>Skai Assist</span>
+            </div>
+            <button onclick="toggleChat()" class="hover:text-gray-200"><i class="fas fa-times"></i></button>
+        </div>
+        
+        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
+
+        <div class="p-3 border-t border-gray-100 bg-white flex gap-2">
+            <input type="text" id="chat-input" placeholder="Type a message..." class="flex-1 border rounded-full px-4 py-2 text-sm focus:outline-none focus:border-[var(--color-secondary)]">
+            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center hover:bg-[var(--color-secondary-dark)] transition-colors">
+                <i class="fas fa-paper-plane text-xs"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- ADMIN CHAT PANEL -->
+    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
+        <div class="w-1/3 border-r border-gray-200 bg-gray-50 flex flex-col">
+            <div class="p-4 border-b font-bold text-lg bg-white flex justify-between items-center">
+                <span class="text-[var(--color-secondary-dark)]">📥 Inbox</span>
+                <a href="index.html" class="text-xs text-gray-400 hover:text-red-500 border border-gray-300 px-2 py-1 rounded">Exit Admin</a>
+            </div>
+            <div id="admin-chat-list" class="flex-1 overflow-y-auto"></div>
+        </div>
+        <div class="flex-1 flex flex-col bg-white">
+            <div class="p-4 border-b font-bold text-gray-700 bg-gray-50 flex justify-between items-center">
+                <span id="chat-admin-title">Select a chat...</span>
+                <span class="text-xs text-green-500 flex items-center gap-1"><i class="fas fa-circle text-[8px]"></i> Online</span>
+            </div>
+            <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2">
+                <div class="flex h-full items-center justify-center text-gray-400 flex-col gap-4">
+                    <i class="fas fa-inbox text-4xl opacity-20"></i>
+                    <p>Select a conversation from the left sidebar</p>
+                </div>
+            </div>
+            <div class="p-4 border-t bg-white flex gap-2">
+                <input type="text" id="admin-chat-input" placeholder="Reply as Skai..." class="flex-1 border rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--color-primary)]">
+                <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold hover:bg-[var(--color-primary-dark)]">Send</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // --- LÓGICA COMPARTIDA ---
         let isNSFW = false;
 
-        function toggleMenu() {
-            document.getElementById('mobile-menu').classList.toggle('open');
-        }
-
-        function openModal() {
-            if (isNSFW) {
-                toggleMode(false);
-            } else {
-                document.getElementById('age-modal').classList.remove('hidden');
-            }
-        }
-
-        function closeModal() {
-            document.getElementById('age-modal').classList.add('hidden');
-        }
-
-        function confirmNSFW() {
-            closeModal();
-            toggleMode(true);
-        }
+        function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
+        function openModal() { isNSFW ? toggleMode(false) : document.getElementById('age-modal').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('age-modal').classList.add('hidden'); }
+        function confirmNSFW() { closeModal(); toggleMode(true); }
 
         function toggleMode(nsfw) {
             isNSFW = nsfw;
             const body = document.body;
-            
+            const favicon = document.getElementById('dynamic-favicon');
+
             if (nsfw) {
-                // Activate Dark Mode / NSFW
                 body.classList.add('nsfw-mode');
-                
+                favicon.href = "assets/logo_white.svg"; 
+
                 document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
                 document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
                 document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> NSFW Launch Promo applied!';
                 
-                // Update Price Cards (Visual Only - Showing Discount) - RUTAS ACTUALIZADAS A ASSETS
                 document.getElementById('price-headshot').innerHTML = '<span class="text-gray-500 line-through text-xl block">$50<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$35<\/span>';
                 document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
                 document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
 
-                // Update Images
                 document.getElementById('img1').src = "assets/art1-nsfw.jpg";
                 document.getElementById('img2').src = "assets/art2-nsfw.jpg";
                 document.getElementById('img3').src = "assets/art3-nsfw.jpg";
-
                 document.getElementById('ex-headshot').src = "assets/headshot-nsfw.jpg";
                 document.getElementById('ex-halfbody').src = "assets/halfbody-nsfw.jpg";
                 document.getElementById('ex-fullbody').src = "assets/fullbody-nsfw.jpg";
                 
-                // Update Calculator Values for NSFW (SALE PRICES + PROMO TAG)
                 document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
                 document.getElementById('opt-head').value = 35;
                 document.getElementById('opt-half').innerText = "NSFW Half Body ($55) [PROMO]";
@@ -448,45 +750,32 @@
                 document.getElementById('opt-full').innerText = "NSFW Full Body ($85) [PROMO]";
                 document.getElementById('opt-full').value = 85;
 
-                document.getElementById('feat-1').innerText = "Expressions / Blush";
-                document.getElementById('feat-2').innerText = "Lingerie / Nude";
-                document.getElementById('feat-3').innerText = "Anatomy Details";
-
             } else {
-                // Revert to SFW
                 body.classList.remove('nsfw-mode');
-                
-                document.getElementById('hero-title').innerText = "ChocoBunny Painterly Furry Art";
+                favicon.href = "assets/logo_simple.svg";
+
+                document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
                 document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
                 document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> Special launch prices applied! (30% OFF)';
 
-                // Update Price Cards (Visual - SFW Promo) - RESTAURAR PRECIOS SFW AL VOLVER
                 document.getElementById('price-headshot').innerHTML = '<span class="text-gray-400 line-through text-xl block">$35<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25<\/span>';
                 document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$60<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$45<\/span>';
                 document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$90<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65<\/span>';
 
-                // Update Images - RUTAS ACTUALIZADAS A ASSETS
                 document.getElementById('img1').src = "assets/art1.jpg";
                 document.getElementById('img2').src = "assets/art2.jpg";
                 document.getElementById('img3').src = "assets/art3.jpg";
-
                 document.getElementById('ex-headshot').src = "assets/headshot.jpg";
                 document.getElementById('ex-halfbody').src = "assets/halfbody.jpg";
                 document.getElementById('ex-fullbody').src = "assets/fullbody.jpg";
 
-                // Update Calculator Values for SFW (SALE PRICES + PROMO TAG)
                 document.getElementById('opt-head').innerText = "Headshot ($25) [PROMO]";
                 document.getElementById('opt-head').value = 25;
                 document.getElementById('opt-half').innerText = "Half Body ($45) [PROMO]";
                 document.getElementById('opt-half').value = 45;
                 document.getElementById('opt-full').innerText = "Full Body ($65) [PROMO]";
                 document.getElementById('opt-full').value = 65;
-
-                document.getElementById('feat-1').innerText = "Full shading";
-                document.getElementById('feat-2').innerText = "Detailed outfit";
-                document.getElementById('feat-3').innerText = "Ref Sheet Ready";
             }
-            
             calculate();
         }
 
@@ -494,95 +783,100 @@
             const base = parseFloat(document.getElementById('type').value);
             const bg = parseFloat(document.getElementById('bg').value);
             const extraChar = document.getElementById('extra').checked;
-            
             let total = base + bg;
-            if (extraChar) {
-                total += (base * 0.5);
-            }
-            
+            if (extraChar) total += (base * 0.5);
             document.getElementById('total').innerText = '$' + total.toFixed(0);
         }
 
-        // --- PRE-FILLED GOOGLE FORM LOGIC ---
-        function goToForm(e) {
-            e.preventDefault();
+        // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
+        function openOrderModal() {
+            // Actualizar datos del modal con lo seleccionado en la calculadora
+            const typeSelect = document.getElementById('type');
+            const bgSelect = document.getElementById('bg');
+            const extraCheck = document.getElementById('extra');
+            const totalText = document.getElementById('total').innerText;
 
-            // 1. CONFIGURACIÓN SFW (FORMULARIO NORMAL)
-            // ----------------------------------------
-            const SFW_CONFIG = {
-                formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", 
-                entryType: "entry.1834269951", 
-                entryBg: "entry.2050602513",   
-                entryExtra: "entry.941872474"  
-            };
+            document.getElementById('modal-type').innerText = typeSelect.options[typeSelect.selectedIndex].text;
+            document.getElementById('modal-bg').innerText = bgSelect.options[bgSelect.selectedIndex].text;
+            document.getElementById('modal-extra').innerText = extraCheck.checked ? "Yes" : "No";
+            document.getElementById('modal-total').innerText = totalText;
 
-            // 2. CONFIGURACIÓN NSFW (FORMULARIO +18)
-            // --------------------------------------
-            const NSFW_CONFIG = {
-                formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW",  // <--- ¡FALTA ESTO!
-                entryType: "entry.PON_AQUI_EL_NUMERO",     // <--- ¡FALTA ESTO!
-                entryBg: "entry.PON_AQUI_EL_NUMERO",       // <--- ¡FALTA ESTO!
-                entryExtra: "entry.PON_AQUI_EL_NUMERO"     // <--- ¡FALTA ESTO!
-            };
+            // Mostrar modal
+            document.getElementById('order-summary-modal').classList.remove('hidden');
+        }
 
-            // Detectar cuál usar
+        function closeOrderModal() {
+            document.getElementById('order-summary-modal').classList.add('hidden');
+        }
+
+        // OPCIÓN 1: IR A GOOGLE FORM (Manteniendo lógica anterior)
+        function proceedToForm() {
+            const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
+            const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
             const config = isNSFW ? NSFW_CONFIG : SFW_CONFIG;
             const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
 
-            // 3. Obtener valores
             const typeVal = document.getElementById('type').value;
             const bgVal = document.getElementById('bg').value;
             const extraChar = document.getElementById('extra').checked;
 
-            // 4. Traducir valores a texto entendible (Mapeo exacto a tus Formularios)
-            let typeText = "";
-            let bgText = "";
+            let typeText = "", bgText = "";
             let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
 
+            // LOGICA DE TEXTOS IGUAL QUE ANTES (Simplificada visualmente aquí)
             if (!isNSFW) {
-                // TEXTOS SFW (Deben ser IDÉNTICOS al formulario SFW)
-                // ¡IMPORTANTE! Asegúrate de que las opciones en tu formulario SFW tengan estos nombres ahora:
                 if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
                 if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
                 if(typeVal == "65") typeText = "Full Body ($65) [PROMO]";
-
-                // TEXTOS FONDO SFW
                 if(bgVal == "10") bgText = "Simple (gradient colors)";
                 if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
                 if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; 
-
             } else {
-                // TEXTOS NSFW (Deben ser IDÉNTICOS al formulario NSFW)
                 if(typeVal == "35") typeText = "NSFW Headshot ($35) [PROMO]";
                 if(typeVal == "55") typeText = "NSFW Half Body ($55) [PROMO]";
                 if(typeVal == "85") typeText = "NSFW Full Body ($85) [PROMO]";
-
-                // TEXTOS FONDO NSFW
                 if(bgVal == "10") bgText = "Simple (gradient colors)";
                 if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
                 if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
             }
 
-            // 5. Construir URL
-            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
+            // AQUI AGREGAMOS EL EMAIL SI LO ESCRIBIERON EN EL MODAL (Opcional si el form ya lo pide)
+            // const email = document.getElementById('order-email').value;
+            // Podríamos añadirlo a la URL si tuvieras el ID del campo Email del form
 
-            // 6. Abrir
-            if (config.formID.includes("PON_AQUI")) {
-                alert("¡Falta configurar el formulario NSFW! Pero el SFW funciona perfecto.");
-            } else {
-                window.open(finalURL, '_blank');
+            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
+            
+            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW."); } 
+            else { 
+                closeOrderModal();
+                window.open(finalURL, '_blank'); 
             }
+        }
+
+        // OPCIÓN 2: IR AL CHAT (Nueva funcionalidad)
+        function proceedToChat() {
+            const email = document.getElementById('order-email').value;
+            if (!email) {
+                alert("Please enter your email so I can notify you about your order status.");
+                return;
+            }
+
+            // Recopilar datos para el mensaje inicial
+            const typeText = document.getElementById('modal-type').innerText;
+            const bgText = document.getElementById('modal-bg').innerText;
+            const extraText = document.getElementById('modal-extra').innerText;
+            const totalText = document.getElementById('modal-total').innerText;
+
+            const initialMessage = `Hi Skai! I'd like to discuss a commission request:\n- Type: ${typeText}\n- Background: ${bgText}\n- Extra Char: ${extraText}\n- Estimate: ${totalText}\n\nMy contact email is: ${email}`;
+
+            // Guardar email globalmente para usarlo en la notificación
+            window.clientEmailForNotify = email;
+
+            closeOrderModal();
+            // Abrir chat y enviar mensaje automático
+            document.getElementById('chat-window').classList.remove('hidden');
+            window.sendMessage(initialMessage);
         }
     </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
