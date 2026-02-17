@@ -74,7 +74,6 @@
         });
 
         // --- CARGA DINÁMICA DE PORTAFOLIO ---
-        // Ahora guardamos los datos en una variable global para que el filtro SFW/NSFW funcione rápido
         function setupPortfolioListener() {
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
@@ -82,15 +81,12 @@
                 snapshot.forEach((doc) => {
                     items.push({ id: doc.id, ...doc.data() });
                 });
-                // Guardamos los datos en window para que el script normal pueda acceder
                 window.portfolioData = items;
                 
-                // Renderizamos
                 if (typeof window.renderPortfolio === 'function') {
                     window.renderPortfolio();
                 }
 
-                // Actualizar lista de admin si corresponde
                 if (currentUser && currentUser.uid === ADMIN_UID) {
                     renderAdminPortfolioList(items);
                 }
@@ -98,12 +94,37 @@
         }
         setupPortfolioListener();
 
+        function renderPortfolio() {
+            const grid = document.getElementById('portfolio-grid');
+            const existingDynamic = document.querySelectorAll('.dynamic-item');
+            existingDynamic.forEach(e => e.remove());
+
+            const staticItems = Array.from(document.querySelectorAll('.static-portfolio-item'));
+
+            window.portfolioData.forEach((item) => {
+                if (!isNSFW && item.nsfw) return; 
+
+                const div = document.createElement('div');
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
+                
+                if(item.nsfw) div.classList.add("border-2", "border-red-500");
+
+                div.innerHTML = `
+                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
+                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
+                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
+                    </div>
+                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
+                `;
+                grid.insertBefore(div, grid.firstChild); 
+            });
+        }
+
         // --- FUNCIONES ADMIN ---
         window.loginAdmin = async () => {
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
             const btn = document.getElementById('login-btn');
-            
             btn.innerText = "Verificando...";
             try {
                 await signInWithEmailAndPassword(auth, email, pass);
@@ -118,7 +139,6 @@
             
             const file = document.getElementById('art-file').files[0];
             const title = document.getElementById('art-title').value;
-            // Nuevo: Checkbox NSFW
             const isNsfw = document.getElementById('art-nsfw').checked;
             const status = document.getElementById('upload-status');
 
@@ -135,7 +155,7 @@
                 await addDoc(collection(db, "portfolio"), {
                     title: title || "Sin título",
                     imageUrl: url,
-                    nsfw: isNsfw, // Guardamos si es NSFW
+                    nsfw: isNsfw, 
                     storagePath: snapshot.metadata.fullPath,
                     createdAt: serverTimestamp()
                 });
@@ -154,7 +174,6 @@
             }
         };
 
-        // Renderizar lista para borrar en admin
         function renderAdminPortfolioList(items) {
             const list = document.getElementById('admin-portfolio-list');
             if(!list) return;
@@ -207,6 +226,7 @@
                     list.appendChild(div);
                 });
             });
+            renderAdminPortfolioList(window.portfolioData || []);
         }
 
         window.loadAdminChat = (id, name) => {
@@ -228,7 +248,6 @@
             });
         };
 
-        // --- CHAT CLIENTE ---
         window.sendMessage = async (textOverride = null) => {
             const input = document.getElementById('chat-input');
             const msg = textOverride || input.value.trim();
@@ -291,7 +310,6 @@
             document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
         };
 
-        // Admin Send
         const adminInput = document.getElementById('admin-chat-input');
         if(adminInput) {
             const sendAdmin = async () => {
@@ -411,6 +429,7 @@
     <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
+                <!-- LOGO DESDE ASSETS -->
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
                     <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
                 </span>
@@ -549,6 +568,7 @@
                 <div>
                     <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
                     <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
@@ -605,8 +625,10 @@
         <div class="flex-1 p-0 flex relative">
             <!-- CHAT TAB -->
             <div id="admin-chat-section" class="flex-1 flex flex-col">
+                <!-- Chat List Sidebar -->
                 <div class="flex h-full">
                     <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
+                    <!-- Chat Area -->
                     <div class="flex-1 flex flex-col">
                         <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
                         <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
