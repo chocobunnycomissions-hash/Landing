@@ -10,13 +10,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <!-- FIREBASE & CHAT MODULE -->
+    <!-- FIREBASE, CHAT & STORAGE MODULE -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
-        // --- ⚙️ TU CONFIGURACIÓN REAL DE FIREBASE ---
+        // --- 1. CONFIGURACIÓN DE FIREBASE (Skai Chat) ---
         const firebaseConfig = {
             apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
             authDomain: "skai-chat-4eeab.firebaseapp.com",
@@ -27,141 +28,246 @@
             measurementId: "G-7Z3XTYL288"
         };
 
-        // URL de tu Google Script (Webhook)
-        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec"; 
+        // --- 2. CONFIGURACIÓN DE SEGURIDAD (Tú eres el único admin) ---
+        const ADMIN_UID = "6lYsULY3Opci9OHviBdZbedCrKn1"; 
         
-        // --- 🔒 CONFIGURACIÓN ADMIN ---
-        const ADMIN_PASSWORD = "Ultrakill1"; // <--- CAMBIA ESTA CONTRASEÑA
+        // --- 3. WEBHOOK DE GOOGLE SCRIPT (Notificaciones) ---
+        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
 
-        // Inicializar Firebase
-        let db, auth;
-        try {
-            const app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-            console.log("🔥 Firebase Conectado");
-        } catch (e) { 
-            console.error("Error inicializando Firebase:", e); 
-        }
+        // Inicializar Servicios
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const storage = getStorage(app);
 
-        // VARIABLES UI
+        // Variables Globales
+        let currentUser = null;
+        let currentChatId = null;
+        
+        // Elementos UI
         const chatWindow = document.getElementById('chat-window');
         const chatMessages = document.getElementById('chat-messages');
         const chatInput = document.getElementById('chat-input');
-        
         const adminPanel = document.getElementById('admin-chat-panel');
-        const adminList = document.getElementById('admin-chat-list');
-        const chatAdminTitle = document.getElementById('chat-admin-title');
-        
-        let currentUser = null;
-        let currentChatId = null;
-        // Detecta si intentas entrar como admin (ej: ?mode=admin)
-        let isAdminMode = new URLSearchParams(window.location.search).get('mode') === 'admin';
+        const loginModal = document.getElementById('admin-login-modal');
+        const portfolioGrid = document.getElementById('portfolio-grid');
 
-        // --- AUTENTICACIÓN ---
-        if (auth) {
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    currentUser = user;
-                    
-                    // Si estamos en la URL de admin, pedimos contraseña
-                    if (isAdminMode) {
-                        checkAdminAccess();
-                    } else {
-                        // Modo Cliente Normal
-                        const savedChatId = localStorage.getItem('skai_chat_id');
-                        if (savedChatId) {
-                            currentChatId = savedChatId;
-                            listenToChat(currentChatId);
-                        }
+        // Detectar si estamos intentando entrar al modo admin
+        const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+
+        // --- SISTEMA DE AUTENTICACIÓN ---
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                console.log("Usuario conectado:", user.uid);
+
+                if (user.uid === ADMIN_UID) {
+                    // Eres TÚ: Mostrar panel de control
+                    if (wantsAdmin) {
+                        loginModal.classList.add('hidden'); // Ocultar login si ya estabas logueado
+                        initAdminPanel();
                     }
                 } else {
-                    signInAnonymously(auth).catch((error) => console.error("Error Auth:", error));
+                    // Es un CLIENTE: Cargar chat normal
+                    const savedChatId = localStorage.getItem('skai_chat_id');
+                    if (savedChatId) {
+                        currentChatId = savedChatId;
+                        listenToChat(currentChatId);
+                    }
                 }
+            } else {
+                // Nadie conectado
+                if (wantsAdmin) {
+                    // Mostrar modal de login para que entres
+                    loginModal.classList.remove('hidden');
+                } else {
+                    // Conectar cliente anónimo silenciosamente
+                    signInAnonymously(auth).catch(e => console.error(e));
+                }
+            }
+        });
+
+        // --- GESTIÓN DE PORTAFOLIO (Dinámico) ---
+        // Carga las imágenes de Firebase + las estáticas
+        function loadPortfolio() {
+            const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
+            onSnapshot(q, (snapshot) => {
+                // Guardamos los items estáticos actuales (los que están escritos en HTML abajo)
+                const staticItems = document.querySelectorAll('.static-portfolio-item');
+                
+                portfolioGrid.innerHTML = ''; // Limpiar grid
+
+                // 1. Pintar items nuevos de Firebase
+                snapshot.forEach((doc) => {
+                    const item = doc.data();
+                    const div = document.createElement('div');
+                    div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group";
+                    div.innerHTML = `
+                        <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+                            <span class="text-white font-bold text-xl text-center px-2">${item.title}</span>
+                        </div>
+                        <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
+                    `;
+                    portfolioGrid.appendChild(div);
+                });
+
+                // 2. Volver a pintar los items estáticos al final
+                staticItems.forEach(item => portfolioGrid.appendChild(item));
             });
         }
+        
+        // Cargar portafolio al iniciar la web
+        loadPortfolio();
 
-        // --- SEGURIDAD ADMIN ---
-        function checkAdminAccess() {
-            const pass = prompt("🔒 Admin Access Required\nEnter Password:");
-            if (pass === ADMIN_PASSWORD) {
-                initAdminView();
-            } else {
-                alert("Access Denied");
-                window.location.href = window.location.pathname; // Redirigir al inicio
+        // --- FUNCIONES ADMIN (Login/Upload) ---
+        window.loginAdmin = async function() {
+            const email = document.getElementById('admin-email').value;
+            const pass = document.getElementById('admin-pass').value;
+            const btn = document.getElementById('login-btn');
+            
+            btn.innerText = "Verifying...";
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+                // El onAuthStateChanged detectará el login y abrirá el panel
+            } catch (error) {
+                alert("Login Failed: " + error.message);
+                btn.innerText = "Enter";
             }
         }
 
-        // --- FUNCIONES DEL CHAT (CLIENTE) ---
+        window.uploadArt = async function() {
+            if (currentUser.uid !== ADMIN_UID) return; // Seguridad extra
+            
+            const file = document.getElementById('art-file').files[0];
+            const title = document.getElementById('art-title').value;
+            const status = document.getElementById('upload-status');
+
+            if (!file) { alert("Select a file!"); return; }
+
+            status.innerText = "⏳ Uploading to Cloud...";
+            status.className = "text-blue-500 text-xs font-bold mt-2";
+
+            try {
+                // 1. Subir imagen a Firebase Storage
+                const storageRef = ref(storage, `portfolio/${Date.now()}_${file.name}`);
+                const snapshot = await uploadBytes(storageRef, file);
+                const url = await getDownloadURL(snapshot.ref);
+
+                // 2. Guardar referencia en Base de Datos
+                await addDoc(collection(db, "portfolio"), {
+                    title: title || "New Art",
+                    imageUrl: url,
+                    createdAt: serverTimestamp()
+                });
+
+                status.innerText = "✅ Published successfully!";
+                status.className = "text-green-500 text-xs font-bold mt-2";
+                
+                // Limpiar campos
+                document.getElementById('art-file').value = "";
+                document.getElementById('art-title').value = "";
+                
+                setTimeout(() => status.innerText = "", 3000);
+
+            } catch (e) {
+                status.innerText = "❌ Error: " + e.message;
+                status.className = "text-red-500 text-xs font-bold mt-2";
+            }
+        }
+
+        function initAdminPanel() {
+            adminPanel.classList.remove('hidden');
+            document.getElementById('chat-trigger-btn').classList.add('hidden'); // Ocultar chat de cliente
+            
+            // Cargar lista de chats para admin
+            const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
+            onSnapshot(q, (snapshot) => {
+                const list = document.getElementById('admin-chat-list');
+                list.innerHTML = '';
+                snapshot.forEach(docSnap => {
+                    const chat = docSnap.data();
+                    const div = document.createElement('div');
+                    const activeClass = chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : 'border-l-4 border-transparent';
+                    div.className = `p-4 border-b hover:bg-gray-100 cursor-pointer transition-colors ${activeClass}`;
+                    
+                    let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+
+                    div.innerHTML = `
+                        <div class="flex justify-between">
+                            <span class="font-bold text-gray-700">${chat.clientName}</span>
+                            <span class="text-xs text-gray-400">${time}</span>
+                        </div>
+                        <p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>
+                    `;
+                    div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
+                    list.appendChild(div);
+                });
+            });
+        }
+
+        // --- FUNCIONES CHAT CLIENTE ---
         window.toggleChat = function() {
             chatWindow.classList.toggle('hidden');
-            if (!chatWindow.classList.contains('hidden') && !currentChatId && !isAdminMode) {
-                if (chatMessages.children.length === 0) {
-                    addMessageToUI("Skai Chocobunny", "Hi! 👋 Thanks for reaching out. Let me know what you have in mind for your commission!", false);
+            if (!chatWindow.classList.contains('hidden') && !currentChatId && currentUser.uid !== ADMIN_UID) {
+                 if (chatMessages.children.length === 0) {
+                    addMessageToUI("Skai Chocobunny", "Hi! 👋 Thanks for reaching out. Let me know what you have in mind!", false);
                 }
             }
         }
 
         window.sendMessage = async function(customText = null) {
             const text = customText || chatInput.value.trim();
-            if (!text || !currentUser || !db) return;
+            if (!text || !currentUser) return;
 
-            // 1. CREAR SESIÓN NUEVA
-            if (!currentChatId && !isAdminMode) {
+            // Crear chat si no existe
+            if (!currentChatId && currentUser.uid !== ADMIN_UID) {
                 try {
                     const chatRef = await addDoc(collection(db, "chats"), {
                         clientName: "Guest " + currentUser.uid.slice(0,4),
                         createdAt: serverTimestamp(),
                         lastMessage: text,
                         lastMessageTime: serverTimestamp(),
-                        unread: true // No leído para ti
+                        unread: true
                     });
                     currentChatId = chatRef.id;
                     localStorage.setItem('skai_chat_id', currentChatId);
                     
-                    // Notificar
-                    if (customText && window.clientEmailForNotify) {
-                        sendEmailNotification(text, currentChatId, window.clientEmailForNotify);
-                    } else {
-                        sendEmailNotification(text, currentChatId, "Direct Chat");
-                    }
-                    
+                    // Notificar por correo
+                    const emailForNotify = window.clientEmailForNotify || "No email (Direct Chat)";
+                    sendEmailNotification(text, currentChatId, emailForNotify);
+
                     listenToChat(currentChatId);
-                } catch (e) { console.error("Error creando chat:", e); }
+                } catch(e) { console.error(e); }
             }
 
-            // 2. ENVIAR MENSAJE
-            try {
-                if (currentChatId) {
-                    await addDoc(collection(db, "chats", currentChatId, "messages"), {
-                        text: text,
-                        senderId: currentUser.uid,
-                        senderName: isAdminMode ? "Skai Chocobunny" : "Client",
-                        timestamp: serverTimestamp()
-                    });
+            // Enviar mensaje
+            if (currentChatId) {
+                await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                    text: text,
+                    senderId: currentUser.uid,
+                    senderName: currentUser.uid === ADMIN_UID ? "Skai Chocobunny" : "Client",
+                    timestamp: serverTimestamp()
+                });
+                
+                await setDoc(doc(db, "chats", currentChatId), {
+                    lastMessage: text,
+                    lastMessageTime: serverTimestamp(),
+                    unread: currentUser.uid !== ADMIN_UID 
+                }, { merge: true });
 
-                    await setDoc(doc(db, "chats", currentChatId), {
-                        lastMessage: text,
-                        lastMessageTime: serverTimestamp(),
-                        unread: !isAdminMode 
-                    }, { merge: true });
-
-                    if (!customText) chatInput.value = "";
-                }
-            } catch (e) { console.error("Error enviando:", e); }
+                if (!customText) chatInput.value = "";
+            }
         }
 
-        // ESCUCHA MENSAJES (VISTA CLIENTE)
         function listenToChat(chatId) {
             const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
             onSnapshot(q, (snapshot) => {
                 chatMessages.innerHTML = '';
-                snapshot.forEach((doc) => {
+                snapshot.forEach(doc => {
                     const msg = doc.data();
                     const isMe = msg.senderId === currentUser.uid;
-                    // En vista cliente: Skai es el otro, Yo soy Yo.
-                    const displayName = msg.senderName === "Skai Chocobunny" ? "Skai Chocobunny" : "You";
-                    addMessageToUI(displayName, msg.text, isMe);
+                    const name = msg.senderName === "Skai Chocobunny" ? "Skai Chocobunny" : "You";
+                    addMessageToUI(name, msg.text, isMe);
                 });
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             });
@@ -170,308 +276,157 @@
         function addMessageToUI(sender, text, isMe) {
             const div = document.createElement('div');
             div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3`;
-            const bubbleClass = isMe 
-                ? 'bg-[var(--color-secondary)] text-white rounded-br-none' 
-                : 'bg-gray-100 text-gray-800 rounded-bl-none';
-
-            div.innerHTML = `
-                <div class="${bubbleClass} px-4 py-2 rounded-2xl max-w-[85%] shadow-sm text-sm break-words">
-                    ${text}
-                </div>
-                <span class="text-[10px] text-gray-400 mt-1 px-1">${sender}</span>
-            `;
+            const bg = isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-gray-100 text-gray-800';
+            div.innerHTML = `<div class="${bg} px-4 py-2 rounded-2xl max-w-[85%] shadow-sm text-sm break-words">${text}</div><span class="text-[10px] text-gray-400 mt-1 px-1">${sender}</span>`;
             chatMessages.appendChild(div);
         }
 
-        // --- MODO ADMIN (TU PANEL DE CONTROL) ---
-        function initAdminView() {
-            // Ocultar elementos de cliente
-            document.getElementById('chat-trigger-btn').classList.add('hidden');
-            
-            // Mostrar panel admin
-            adminPanel.classList.remove('hidden');
-
-            // Cargar lista de chats
-            const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
-            onSnapshot(q, (snapshot) => {
-                adminList.innerHTML = '';
-                snapshot.forEach((docSnap) => {
-                    const chat = docSnap.data();
-                    const div = document.createElement('div');
-                    
-                    // Estilo si hay mensajes sin leer
-                    const activeClass = chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : 'border-l-4 border-transparent';
-                    div.className = `p-4 border-b hover:bg-gray-100 cursor-pointer transition-colors ${activeClass}`;
-                    
-                    let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
-
-                    div.innerHTML = `
-                        <div class="flex justify-between items-start">
-                            <h4 class="font-bold text-sm text-gray-700">${chat.clientName || 'Guest'}</h4>
-                            <span class="text-[10px] text-gray-400">${time}</span>
-                        </div>
-                        <p class="text-xs text-gray-500 truncate mt-1 font-medium">${chat.lastMessage}</p>
-                    `;
-                    div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
-                    adminList.appendChild(div);
-                });
-            });
-        }
-
+        // --- LÓGICA ADMIN CHAT (Cargar conversación) ---
         window.loadAdminChat = function(chatId, clientName) {
             currentChatId = chatId;
-            chatAdminTitle.innerText = "Chatting with: " + (clientName || 'Guest');
-            
-            const adminMsgArea = document.getElementById('admin-messages-area');
-            adminMsgArea.innerHTML = '<div class="text-center text-gray-400 mt-10"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+            document.getElementById('chat-admin-title').innerText = "Chatting with: " + clientName;
+            const area = document.getElementById('admin-messages-area');
             
             const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
-            
             onSnapshot(q, (snapshot) => {
-                adminMsgArea.innerHTML = '';
-                snapshot.forEach((doc) => {
+                area.innerHTML = '';
+                snapshot.forEach(doc => {
                     const msg = doc.data();
-                    
-                    // LÓGICA VISUAL ADMIN:
-                    // Si el senderName es "Skai Chocobunny", soy YO (Derecha).
-                    // Si no, es el CLIENTE (Izquierda).
-                    const isMe = msg.senderName === "Skai Chocobunny";
-                    
+                    const isMe = msg.senderId === currentUser.uid; // Soy yo (Admin)
                     const div = document.createElement('div');
                     div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3`;
-                    
-                    const bubbleStyle = isMe 
-                        ? 'bg-[var(--color-primary)] text-white' 
-                        : 'bg-white border border-gray-200 text-gray-800';
-
-                    div.innerHTML = `
-                        <div class="${bubbleStyle} px-4 py-2 rounded-2xl max-w-[70%] shadow-sm text-sm">${msg.text}</div>
-                        <span class="text-[10px] text-gray-400 mt-1">${isMe ? 'You' : 'Client'}</span>
-                    `;
-                    adminMsgArea.appendChild(div);
+                    const bg = isMe ? 'bg-[var(--color-primary)] text-white' : 'bg-white border border-gray-200';
+                    div.innerHTML = `<div class="${bg} px-4 py-2 rounded-2xl max-w-[70%] text-sm">${msg.text}</div>`;
+                    area.appendChild(div);
                 });
-                adminMsgArea.scrollTop = adminMsgArea.scrollHeight;
+                area.scrollTop = area.scrollHeight;
             });
 
-            // Configurar el input del admin
-            const adminInput = document.getElementById('admin-chat-input');
-            const adminSendBtn = document.getElementById('admin-send-btn');
+            // Configurar botón enviar Admin
+            const input = document.getElementById('admin-chat-input');
+            const btn = document.getElementById('admin-send-btn');
             
-            // Reemplazamos el onclick para evitar múltiples listeners
-            adminSendBtn.onclick = null;
-            adminInput.onkeypress = null;
+            // Limpiar listeners anteriores
+            const cloneInput = input.cloneNode(true);
+            const cloneBtn = btn.cloneNode(true);
+            input.parentNode.replaceChild(cloneInput, input);
+            btn.parentNode.replaceChild(cloneBtn, btn);
 
-            const sendAdminMsg = async () => {
-                const text = adminInput.value.trim();
+            const send = async () => {
+                const text = cloneInput.value.trim();
                 if(!text) return;
-                
-                // Enviar como Skai
                 await addDoc(collection(db, "chats", currentChatId, "messages"), {
                     text: text,
-                    senderId: currentUser.uid, // ID de admin
-                    senderName: "Skai Chocobunny", // Nombre forzado
+                    senderId: currentUser.uid,
+                    senderName: "Skai Chocobunny",
                     timestamp: serverTimestamp()
                 });
-                
-                // Marcar como LEÍDO porque acabas de responder
-                await setDoc(doc(db, "chats", currentChatId), { 
-                    lastMessage: text, 
-                    lastMessageTime: serverTimestamp(), 
-                    unread: false 
-                }, { merge: true });
-                
-                adminInput.value = "";
+                await setDoc(doc(db, "chats", currentChatId), { lastMessage: text, lastMessageTime: serverTimestamp(), unread: false }, { merge: true });
+                cloneInput.value = "";
             };
-
-            adminSendBtn.onclick = sendAdminMsg;
-            adminInput.onkeypress = (e) => { if(e.key === 'Enter') sendAdminMsg(); };
+            cloneBtn.onclick = send;
+            cloneInput.onkeypress = (e) => { if(e.key==='Enter') send(); };
         }
 
         // --- NOTIFICACIONES ---
-        function sendEmailNotification(message, chatId, email) {
+        function sendEmailNotification(msg, id, email) {
             fetch(NOTIFICATION_WEBHOOK, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'chat_order',
-                    message: message,
-                    chatId: chatId,
-                    email: email 
-                })
-            }).catch(err => console.log("Error notificación", err));
+                method: 'POST', mode: 'no-cors',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ type: 'chat_order', message: msg, chatId: id, email: email })
+            }).catch(e => console.log(e));
         }
 
-        chatInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') window.sendMessage();
-        });
+        // --- UI HELPERS ---
+        window.switchAdminTab = (tab) => {
+            document.getElementById('admin-chat-section').classList.toggle('hidden', tab !== 'chat');
+            document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
+        }
+        window.logoutAdmin = async () => { await signOut(auth); window.location.href = window.location.pathname; }
+        
+        chatInput.addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
+
+        // --- EXPORTAR FUNCIONES AL HTML ---
+        // (Necesario porque type="module" aísla el scope)
     </script>
 
     <style>
         :root {
             /* --- MODO SFW (Default Pastel) --- */
-            --text-main: #5D5D5D;
-            --text-inverse: #FFFFFF;
-            --bg-body: #FFFAFB;
-            --bg-card: #FFFFFF;
-            
-            --color-primary: #FFC8DD;     /* Rosa Pastel */
-            --color-primary-dark: #FFAAC1;
-            
-            --color-secondary: #A2D2FF;   /* Celeste Pastel */
-            --color-secondary-dark: #80C0FF;
-            
-            --color-accent: #B9FBC0;      /* Verde Menta */
-            --color-accent-dark: #98FB98;
-            
-            --hero-gradient-start: var(--color-primary);
-            --hero-gradient-end: var(--color-secondary);
+            --text-main: #5D5D5D; --text-inverse: #FFFFFF; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
+            --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
+            --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
+            --color-accent: #B9FBC0; --color-accent-dark: #98FB98;
+            --hero-gradient-start: var(--color-primary); --hero-gradient-end: var(--color-secondary);
         }
-
-        /* --- MODO NSFW (Dark/Red/Blue) --- */
         body.nsfw-mode {
-            --text-main: #E0E0E0;         /* Gris claro para leer sobre negro */
-            --text-inverse: #000000;
-            --bg-body: #0a0a0a;           /* Negro casi puro */
-            --bg-card: #141414;           /* Gris muy oscuro */
-            
-            --color-primary: #8B0000;     /* Rojo Sangre Oscuro */
-            --color-primary-dark: #FF0000; /* Rojo Brillante para bordes/hover */
-            
-            --color-secondary: #00008B;   /* Azul Marino Profundo */
-            --color-secondary-dark: #1E90FF; /* Azul Eléctrico */
-            
-            --color-accent: #C62828;      /* Rojo Intenso para botones */
-            --color-accent-dark: #B71C1C; /* Rojo más oscuro para hover */
-
-            --hero-gradient-start: #2b0505; /* Negro Rojizo */
-            --hero-gradient-end: #020a24;   /* Negro Azulado */
+            --text-main: #E0E0E0; --text-inverse: #000000; --bg-body: #0a0a0a; --bg-card: #141414;
+            --color-primary: #8B0000; --color-primary-dark: #FF0000;
+            --color-secondary: #00008B; --color-secondary-dark: #1E90FF;
+            --color-accent: #C62828; --color-accent-dark: #B71C1C;
+            --hero-gradient-start: #2b0505; --hero-gradient-end: #020a24;
         }
-        
-        body {
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            transition: background-color 0.5s ease, color 0.5s ease;
-        }
-        
-        .hero-gradient {
-            background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%);
-            transition: background 0.5s ease;
-        }
-        
-        .card {
-            background: var(--bg-card);
-            border-bottom: 4px solid var(--color-secondary);
-            transition: transform 0.3s ease, background-color 0.5s ease, border-color 0.5s ease;
-        }
-        
-        .card:hover {
-            transform: translateY(-5px);
-        }
-        
-        .btn-primary {
-            background-color: var(--color-accent);
-            color: var(--text-main);
-            transition: all 0.3s ease;
-        }
-        
-        body.nsfw-mode .btn-primary {
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background-color: var(--color-accent-dark);
-            transform: scale(1.05);
-            box-shadow: 0 4px 15px rgba(255, 0, 0, 0.4); 
-        }
-
-        h2, h3 { color: var(--text-main); }
-        .section-title { color: var(--color-secondary-dark); }
-        
-        #age-modal, #order-summary-modal {
-            backdrop-filter: blur(8px);
-        }
-        
-        #mobile-menu {
-            transition: max-height 0.3s ease-in-out;
-            max-height: 0;
-            overflow: hidden;
-        }
-        #mobile-menu.open {
-            max-height: 300px;
-        }
-
+        body { background-color: var(--bg-body); color: var(--text-main); font-family: 'Segoe UI', sans-serif; transition: background 0.5s ease; }
+        .hero-gradient { background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%); transition: background 0.5s ease; }
+        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: 0.3s ease; }
+        .card:hover { transform: translateY(-5px); }
+        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s ease; }
+        body.nsfw-mode .btn-primary { color: white; }
+        .btn-primary:hover { background-color: var(--color-accent-dark); transform: scale(1.05); }
+        #age-modal, #order-summary-modal, #admin-login-modal { backdrop-filter: blur(8px); }
+        #mobile-menu { transition: max-height 0.3s ease-in-out; max-height: 0; overflow: hidden; }
+        #mobile-menu.open { max-height: 300px; }
         .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        
-        /* SCROLLBARS */
-        #chat-messages::-webkit-scrollbar, #admin-chat-list::-webkit-scrollbar, #admin-messages-area::-webkit-scrollbar { width: 6px; }
-        #chat-messages::-webkit-scrollbar-thumb, #admin-chat-list::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
+        /* Scrollbars */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
     </style>
 </head>
 <body class="antialiased relative">
 
-    <!-- Age Verification Modal -->
+    <!-- 1. LOGIN ADMIN MODAL -->
+    <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
+        <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
+            <h2 class="text-2xl font-bold mb-4 text-gray-700">Admin Access</h2>
+            <input type="email" id="admin-email" placeholder="Admin Email" class="w-full border p-3 rounded mb-3">
+            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4">
+            <button id="login-btn" onclick="loginAdmin()" class="w-full bg-blue-500 text-white py-3 rounded font-bold hover:bg-blue-600">Enter</button>
+            <a href="index.html" class="block mt-4 text-xs text-gray-400 hover:underline">Back to Site</a>
+        </div>
+    </div>
+
+    <!-- 2. AGE VERIFICATION MODAL -->
     <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
-        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center transform scale-100 transition-transform">
+        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center">
             <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
             <h3 class="text-3xl font-bold mb-2">NSFW Content Warning</h3>
-            <p class="mb-6 text-gray-300">This section contains adult content. You must be 18 years or older to proceed.</p>
+            <p class="mb-6 text-gray-300">Contains adult content. Are you 18+?</p>
             <div class="flex flex-col gap-3">
-                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold transition-colors">
-                    YES, I am 18+ <span class="text-xs block font-normal">(Enter Dark Mode)</span>
-                </button>
-                <button onclick="closeModal()" class="bg-transparent border border-gray-600 hover:bg-gray-800 text-gray-400 py-2 px-6 rounded-xl font-bold transition-colors">
-                    No, take me back
-                </button>
+                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold">YES, I am 18+</button>
+                <button onclick="closeModal()" class="bg-transparent border border-gray-600 text-gray-400 py-2 px-6 rounded-xl font-bold">No, take me back</button>
             </div>
         </div>
     </div>
 
-    <!-- ORDER SUMMARY MODAL -->
+    <!-- 3. ORDER SUMMARY MODAL -->
     <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
         <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
             <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
-            
             <h3 class="text-3xl font-bold mb-4 text-center text-[var(--color-secondary-dark)]">Review Order</h3>
-            
             <div class="bg-gray-50 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100">
-                <div class="flex justify-between">
-                    <span class="font-bold text-gray-600">Commission Type:</span>
-                    <span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="font-bold text-gray-600">Background:</span>
-                    <span id="modal-bg">Simple</span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="font-bold text-gray-600">Extra Character:</span>
-                    <span id="modal-extra">No</span>
-                </div>
-                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black">
-                    <span>Total Estimate:</span>
-                    <span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span>
-                </div>
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Type:</span><span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span></div>
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Bg:</span><span id="modal-bg">Simple</span></div>
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Extra:</span><span id="modal-extra">No</span></div>
+                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black"><span>Total:</span><span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span></div>
             </div>
-
-            <!-- Email Input -->
             <div class="mb-6">
                 <label class="block font-bold text-sm mb-2 text-gray-600">Your Email <span class="text-red-400">*</span></label>
-                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3 focus:outline-none focus:border-[var(--color-secondary)] transition-colors">
-                <p class="text-xs text-gray-400 mt-1">Required to send you the order confirmation and queue status.</p>
+                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3">
             </div>
-
-            <!-- Action Buttons -->
             <div class="grid grid-cols-2 gap-4">
-                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition-colors border border-gray-200">
-                    <i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i>
-                    <span class="text-sm">Google Form</span>
-                </button>
-                <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 transition-colors shadow-lg">
-                    <i class="fas fa-comments text-xl"></i>
-                    <span class="text-sm">Discuss in Chat</span>
-                </button>
+                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1"><i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i><span class="text-sm">Google Form</span></button>
+                <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 shadow-lg"><i class="fas fa-comments text-xl"></i><span class="text-sm">Discuss in Chat</span></button>
             </div>
         </div>
     </div>
@@ -481,139 +436,71 @@
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
-                    <img src="assets/logo_simple.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen">
+                    <img src="assets/logo_simple.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
                 </span>
                 <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
                 <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
             </div>
-            
-            <button class="md:hidden text-[var(--text-main)] focus:outline-none" onclick="toggleMenu()">
-                <i class="fas fa-bars text-2xl"></i>
-            </button>
-
+            <button class="md:hidden text-[var(--text-main)]" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
             <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
-                <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
-                <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
-                <a href="#tos" class="hover:text-[var(--color-primary-dark)] transition-colors">TOS</a>
-                <button onclick="openModal()" class="border-2 border-red-400 text-red-400 hover:bg-red-400 hover:text-white px-4 py-1 rounded-full text-sm font-bold transition-all">
-                    <i class="fas fa-exclamation-circle mr-1"></i> NSFW / 18+
-                </button>
+                <a href="#portfolio" class="hover:text-[var(--color-primary-dark)]">Portfolio</a>
+                <a href="#prices" class="hover:text-[var(--color-primary-dark)]">Prices</a>
+                <a href="#tos" class="hover:text-[var(--color-primary-dark)]">TOS</a>
+                <button onclick="openModal()" class="border-2 border-red-400 text-red-400 hover:bg-red-400 hover:text-white px-4 py-1 rounded-full text-sm font-bold">NSFW / 18+</button>
                 <a href="#contact" class="btn-primary px-6 py-2 rounded-full font-bold shadow-sm text-sm">Contact Me</a>
             </div>
         </div>
-
         <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-gray-500 text-center border-t border-gray-100 mt-4">
-            <a href="#portfolio" class="hover:text-[var(--color-primary-dark)]">Portfolio</a>
-            <a href="#prices" class="hover:text-[var(--color-primary-dark)]">Prices</a>
-            <a href="#tos" class="hover:text-[var(--color-primary-dark)]">TOS</a>
-            <button onclick="openModal()" class="text-red-400 font-bold">NSFW / 18+ Mode</button>
-            <a href="#contact" class="btn-primary py-2 rounded-full mx-10">Contact Me</a>
+            <a href="#portfolio">Portfolio</a><a href="#prices">Prices</a><button onclick="openModal()" class="text-red-400 font-bold">NSFW Mode</button>
         </div>
     </nav>
 
-    <!-- Hero Section -->
+    <!-- Hero -->
     <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
-        <div class="absolute top-10 left-10 text-white/30 text-8xl"><i class="fas fa-heart"></i></div>
-        <div class="absolute bottom-10 right-10 text-white/30 text-8xl"><i class="fas fa-star"></i></div>
-
         <div class="max-w-4xl mx-auto relative z-10">
-            <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
-                <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
-            </div>
-
-            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md transition-all">Atmospheric & Painterly Furry Art</h1>
-            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
+            <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default"><i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!</div>
+            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md">Atmospheric & Painterly Furry Art</h1>
+            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm">Bringing your characters to life.</p>
             <div class="flex flex-wrap justify-center gap-4">
                 <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Sale Prices</a>
-                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center">
-                    <i class="fab fa-trello mr-2"></i> Check Queue
-                </a>
+                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black flex items-center gap-2"><i class="fab fa-trello"></i> Check Queue</a>
             </div>
         </div>
     </section>
 
-    <!-- Quick Portfolio -->
+    <!-- Portfolio Grid (DYNAMIC) -->
     <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
         <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img1" src="assets/art1.jpg" alt="Art 1" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img2" src="assets/art2.jpg" alt="Art 2" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-accent)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img3" src="assets/art3.jpg" alt="Art 3" class="w-full h-full object-cover transition-opacity duration-500">
+        <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <!-- ITEMS SE CARGARÁN AQUÍ AUTOMÁTICAMENTE -->
+            <!-- Item estático de reserva (puedes borrarlo si quieres) -->
+            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
+                <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"><span class="text-white font-bold text-xl">View Detail</span></div>
+                <img id="img1" src="assets/art1.jpg" class="w-full h-full object-cover">
             </div>
         </div>
     </section>
 
-    <!-- Pricing Section -->
+    <!-- Pricing -->
     <section id="prices" class="bg-[var(--color-primary)]/10 py-20 px-6 transition-colors duration-500">
         <div class="max-w-6xl mx-auto">
-            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] transition-colors">Commission Rates</h2>
-            <p id="price-subtitle" class="text-center mb-16 opacity-70">
-                <span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE</span>
-                Special launch prices applied! (30% OFF)
-            </p>
-            
+            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)]">Commission Rates</h2>
+            <p id="price-subtitle" class="text-center mb-16 opacity-70"><span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE</span> 30% OFF Launch!</p>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
-                    <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
-                    <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
-                    <div id="price-headshot" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$35</span>
-                        <span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
-                    </ul>
+                    <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group"><img id="ex-headshot" src="assets/headshot.jpg" class="w-full h-full object-cover"></div>
+                    <h3 class="text-2xl font-bold mb-4">Headshot</h3>
+                    <div id="price-headshot" class="mb-6"><span class="text-gray-400 line-through text-xl block">$35</span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span></div>
                 </div>
-
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
-                    <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
-                    <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative z-10 flex flex-col">
+                    <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group"><img id="ex-halfbody" src="assets/halfbody.jpg" class="w-full h-full object-cover"></div>
                     <h3 class="text-2xl font-bold mb-4">Half Body</h3>
-                    <div id="price-halfbody" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$60</span>
-                        <span class="text-4xl font-black text-[var(--color-secondary)]">$45</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
-                    </ul>
+                    <div id="price-halfbody" class="mb-6"><span class="text-gray-400 line-through text-xl block">$60</span><span class="text-4xl font-black text-[var(--color-secondary)]">$45</span></div>
                 </div>
-
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
-                    <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
+                    <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group"><img id="ex-fullbody" src="assets/fullbody.jpg" class="w-full h-full object-cover"></div>
                     <h3 class="text-2xl font-bold mb-4">Full Body</h3>
-                    <div id="price-fullbody" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$90</span>
-                        <span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
-                    </ul>
+                    <div id="price-fullbody" class="mb-6"><span class="text-gray-400 line-through text-xl block">$90</span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span></div>
                 </div>
             </div>
         </div>
@@ -622,153 +509,90 @@
     <!-- Calculator -->
     <section class="py-20 px-6 max-w-3xl mx-auto">
         <div class="card p-10 rounded-3xl shadow-lg border border-[var(--color-secondary)]/30">
-            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Your Project</h3>
+            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Project</h3>
             <div class="space-y-6">
-                <div>
-                    <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
-                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
-                        <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
-                        <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block font-bold mb-2 opacity-80">Background Complexity</label>
-                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <option value="10">Simple (gradient colors) ($10)</option>
-                        <option value="40">Complex (environment, settings, etc) ($40)</option>
-                        <option value="50">Full Cinematic ($50)</option>
-                    </select>
-                </div>
-                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl">
-                    <input type="checkbox" id="extra" class="w-6 h-6 accent-[var(--color-primary)]" onchange="calculate()">
-                    <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
-                </div>
-                
-                <div class="pt-8 border-t border-dashed border-gray-400/30">
-                    <div class="flex justify-between items-center text-3xl font-black mb-8">
-                        <span class="opacity-80">Total Estimate:</span>
-                        <span id="total" class="text-[var(--color-accent-dark)]">$55</span>
-                    </div>
-                    
-                    <div class="flex flex-col md:flex-row gap-4 justify-center">
-                         <button onclick="openOrderModal()" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
-                            <i class="fas fa-clipboard-check"></i> Fill Order Form
-                        </button>
-                        <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
-                            <i class="fab fa-trello"></i> Check Queue
-                        </a>
-                    </div>
-                    
-                    <p class="text-center mt-6 text-sm opacity-70">
-                        Is this process too formal for you? Don't worry! <br>
-                        <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
-                    </p>
-                </div>
+                <select id="type" class="w-full p-3 rounded-xl border-2 border-gray-100" onchange="calculate()">
+                    <option value="25" id="opt-head">Headshot ($25)</option>
+                    <option value="45" id="opt-half" selected>Half Body ($45)</option>
+                    <option value="65" id="opt-full">Full Body ($65)</option>
+                </select>
+                <select id="bg" class="w-full p-3 rounded-xl border-2 border-gray-100" onchange="calculate()">
+                    <option value="10">Simple Gradient ($10)</option>
+                    <option value="40">Complex ($40)</option>
+                    <option value="50">Cinematic ($50)</option>
+                </select>
+                <div class="flex items-center gap-4 p-4 bg-pink-50 rounded-xl"><input type="checkbox" id="extra" class="w-6 h-6" onchange="calculate()"> <label>Extra Char (+50%)</label></div>
+                <div class="pt-8 border-t flex justify-between text-3xl font-black"><span>Total:</span><span id="total" class="text-[var(--color-accent-dark)]">$55</span></div>
+                <div class="flex justify-center"><button onclick="openOrderModal()" class="btn-primary w-full py-4 rounded-xl font-bold shadow-lg">Start Order</button></div>
             </div>
         </div>
     </section>
 
-    <!-- TOS -->
-    <section id="tos" class="py-20 px-6 relative bg-[var(--bg-card)]">
-        <div class="max-w-4xl mx-auto relative z-10">
-            <h2 class="text-4xl font-bold mb-12 text-center text-[var(--color-secondary-dark)]">Terms of Service</h2>
-            <div class="grid md:grid-cols-2 gap-12">
-                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
-                    <h4 class="text-xl font-bold mb-4 text-[var(--color-primary-dark)]"><i class="fas fa-user-shield mr-2"></i> General Rules</h4>
-                    <ul class="space-y-2 opacity-80 text-sm">
-                        <li>• Payment via PayPal only (USD).</li>
-                        <li>• 50% or 100% upfront payment.</li>
-                        <li>• I have the right to refuse any request.</li>
-                    </ul>
-                </div>
-                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
-                    <h4 class="text-xl font-bold mb-4 text-[var(--color-secondary-dark)]"><i class="fas fa-paint-brush mr-2"></i> Content Rules</h4>
-                    <ul class="space-y-2 opacity-80 text-sm">
-                        <li>• For personal use only.</li>
-                        <li>• Do not claim the art as your own.</li>
-                        <li>• <b class="text-[var(--color-accent)]">NSFW available via button above.</b></li>
-                        <li>• <b>No Mechas / Robots.</b></li>
-                    </ul>
-                </div>
+    <!-- ADMIN PANEL -->
+    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
+        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
+            <h3 class="font-bold text-lg text-gray-700">Admin Control</h3>
+            <button onclick="switchAdminTab('chat')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-blue-50 font-bold">💬 Messages</button>
+            <button onclick="switchAdminTab('portfolio')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-pink-50 font-bold">🖼️ Upload Art</button>
+            <div class="mt-auto">
+                <button onclick="logoutAdmin()" class="text-red-500 text-sm font-bold w-full text-center border p-2 rounded hover:bg-red-50">Logout</button>
             </div>
         </div>
-    </section>
-
-    <!-- Contact Section -->
-    <section id="contact" class="py-20 px-6 text-center bg-gradient-to-b from-[var(--bg-body)] to-[var(--color-secondary)]/10">
-        <h2 class="text-4xl font-bold mb-8 text-[var(--text-main)]">Ready to start?</h2>
-        <p class="text-xl mb-8 opacity-70 max-w-2xl mx-auto">Please fill out the form above or send me a DM. I usually reply within 24 hours.</p>
         
-        <div class="flex justify-center gap-6 flex-wrap">
-            <button onclick="openOrderModal()" class="btn-primary px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 cursor-pointer">
-                <i class="fas fa-clipboard-list"></i> Order Now
-            </button>
-            <a href="https://twitter.com" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 transition-colors">
-                <i class="fab fa-twitter"></i> Twitter DM
-            </a>
-        </div>
-    </section>
+        <div class="flex-1 p-0 flex relative">
+            <!-- CHAT TAB -->
+            <div id="admin-chat-section" class="flex-1 flex flex-col">
+                <!-- Chat List Sidebar -->
+                <div class="flex h-full">
+                    <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
+                    <!-- Chat Area -->
+                    <div class="flex-1 flex flex-col">
+                        <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
+                        <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
+                        <div class="p-4 border-t bg-white flex gap-2">
+                            <input type="text" id="admin-chat-input" placeholder="Reply..." class="flex-1 border rounded-lg px-4 py-3">
+                            <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-    <footer class="py-10 bg-[var(--color-secondary-dark)] text-white text-center">
-        <p class="font-medium opacity-90">© 2024 Skai Chocobunny Art. All rights reserved.</p>
-    </footer>
-
-    <!-- CLIENT CHAT UI -->
-    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
-        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform border-2 border-white">
-            <i class="fas fa-comment-dots text-2xl"></i>
+            <!-- PORTFOLIO TAB -->
+            <div id="admin-portfolio-section" class="hidden flex-1 p-10 bg-gray-50 h-full overflow-y-auto">
+                <h2 class="text-3xl font-bold mb-6 text-gray-800">Gallery Manager</h2>
+                <div class="max-w-xl bg-white border p-8 rounded-2xl shadow-lg">
+                    <div class="mb-4">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Artwork Title</label>
+                        <input type="text" id="art-title" class="w-full border-2 border-gray-200 p-3 rounded-lg focus:border-pink-300 outline-none" placeholder="e.g. Cyber Bunny">
+                    </div>
+                    <div class="mb-6">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Image File (PNG/JPG)</label>
+                        <input type="file" id="art-file" accept="image/*" class="w-full border-2 border-gray-200 p-3 rounded-lg">
+                    </div>
+                    <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-4 rounded-xl font-bold hover:bg-green-600 transition shadow-lg transform active:scale-95">Upload to Portfolio</button>
+                    <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
+                </div>
+            </div>
         </div>
     </div>
 
+    <!-- CLIENT CHAT BUTTON & WINDOW -->
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
+        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white"><i class="fas fa-comment-dots text-2xl"></i></div>
+    </div>
     <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
         <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
-            <div class="flex items-center gap-2">
-                <i class="fas fa-robot"></i>
-                <span>Skai Assist</span>
-            </div>
-            <button onclick="toggleChat()" class="hover:text-gray-200"><i class="fas fa-times"></i></button>
+            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
         </div>
-        
         <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
-
-        <div class="p-3 border-t border-gray-100 bg-white flex gap-2">
-            <input type="text" id="chat-input" placeholder="Type a message..." class="flex-1 border rounded-full px-4 py-2 text-sm focus:outline-none focus:border-[var(--color-secondary)]">
-            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center hover:bg-[var(--color-secondary-dark)] transition-colors">
-                <i class="fas fa-paper-plane text-xs"></i>
-            </button>
-        </div>
-    </div>
-
-    <!-- ADMIN CHAT PANEL -->
-    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
-        <div class="w-1/3 border-r border-gray-200 bg-gray-50 flex flex-col">
-            <div class="p-4 border-b font-bold text-lg bg-white flex justify-between items-center">
-                <span class="text-[var(--color-secondary-dark)]">📥 Inbox</span>
-                <a href="index.html" class="text-xs text-gray-400 hover:text-red-500 border border-gray-300 px-2 py-1 rounded">Exit Admin</a>
-            </div>
-            <div id="admin-chat-list" class="flex-1 overflow-y-auto"></div>
-        </div>
-        <div class="flex-1 flex flex-col bg-white">
-            <div class="p-4 border-b font-bold text-gray-700 bg-gray-50 flex justify-between items-center">
-                <span id="chat-admin-title">Select a chat...</span>
-                <span class="text-xs text-green-500 flex items-center gap-1"><i class="fas fa-circle text-[8px]"></i> Online</span>
-            </div>
-            <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2">
-                <div class="flex h-full items-center justify-center text-gray-400 flex-col gap-4">
-                    <i class="fas fa-inbox text-4xl opacity-20"></i>
-                    <p>Select a conversation from the left sidebar</p>
-                </div>
-            </div>
-            <div class="p-4 border-t bg-white flex gap-2">
-                <input type="text" id="admin-chat-input" placeholder="Reply as Skai..." class="flex-1 border rounded-lg px-4 py-3 focus:outline-none focus:border-[var(--color-primary)]">
-                <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold hover:bg-[var(--color-primary-dark)]">Send</button>
-            </div>
+        <div class="p-3 border-t bg-white flex gap-2">
+            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
+            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
         </div>
     </div>
 
     <script>
-        // --- LÓGICA COMPARTIDA ---
+        // LOGICA DE SCRIPT: Formulario, Toggle SFW/NSFW y Calculadora
         let isNSFW = false;
 
         function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
@@ -780,10 +604,12 @@
             isNSFW = nsfw;
             const body = document.body;
             const favicon = document.getElementById('dynamic-favicon');
+            const faviconImg = document.getElementById('dynamic-favicon-img');
 
             if (nsfw) {
                 body.classList.add('nsfw-mode');
                 favicon.href = "assets/logo_white.svg"; 
+                if(faviconImg) faviconImg.src = "assets/logo_white.svg";
 
                 document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
                 document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
@@ -810,6 +636,7 @@
             } else {
                 body.classList.remove('nsfw-mode');
                 favicon.href = "assets/logo_simple.svg";
+                if(faviconImg) faviconImg.src = "assets/logo_simple.svg";
 
                 document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
                 document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
@@ -878,7 +705,36 @@
             const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
             if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
         }
+
+        // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
+        window.openOrderModal = function() {
+            const typeSelect = document.getElementById('type');
+            const bgSelect = document.getElementById('bg');
+            const extraCheck = document.getElementById('extra');
+            const totalText = document.getElementById('total').innerText;
+            document.getElementById('modal-type').innerText = typeSelect.options[typeSelect.selectedIndex].text;
+            document.getElementById('modal-bg').innerText = bgSelect.options[bgSelect.selectedIndex].text;
+            document.getElementById('modal-extra').innerText = extraCheck.checked ? "Yes" : "No";
+            document.getElementById('modal-total').innerText = totalText;
+            document.getElementById('order-summary-modal').classList.remove('hidden');
+        }
+        window.closeOrderModal = function() { document.getElementById('order-summary-modal').classList.add('hidden'); }
+        
+        window.proceedToForm = goToForm; // Reutilizamos lógica
+
+        window.proceedToChat = function() {
+            const email = document.getElementById('order-email').value;
+            if (!email) { alert("Please enter your email so I can notify you about your order status."); return; }
+            const typeText = document.getElementById('modal-type').innerText;
+            const bgText = document.getElementById('modal-bg').innerText;
+            const extraText = document.getElementById('modal-extra').innerText;
+            const totalText = document.getElementById('modal-total').innerText;
+            const initialMessage = `Hi Skai! I'd like to discuss a commission request:\n- Type: ${typeText}\n- Background: ${bgText}\n- Extra Char: ${extraText}\n- Estimate: ${totalText}\n\nMy contact email is: ${email}`;
+            window.clientEmailForNotify = email;
+            closeOrderModal();
+            document.getElementById('chat-window').classList.remove('hidden');
+            window.sendMessage(initialMessage);
+        }
     </script>
 </body>
 </html>
-
