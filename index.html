@@ -19,7 +19,7 @@
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
-        // --- ⚙️ CONFIGURACIÓN DE FIREBASE (ORIGINAL) ---
+        // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
         const firebaseConfig = {
             apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
             authDomain: "skai-chat-4eeab.firebaseapp.com",
@@ -30,10 +30,7 @@
             measurementId: "G-7Z3XTYL288"
         };
 
-        // --- 🔐 TU UID DE ADMIN ---
         const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
-        
-        // --- WEBHOOK DE GOOGLE SCRIPT ---
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
 
         // Inicializar
@@ -44,7 +41,6 @@
 
         let currentUser = null;
         let currentChatId = null;
-        let portfolioData = []; // Almacenamos localmente para filtrar rápido
 
         // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
@@ -77,66 +73,37 @@
             }
         });
 
-        // --- CARGA DINÁMICA DE PORTAFOLIO (PÚBLICO) ---
+        // --- CARGA DINÁMICA DE PORTAFOLIO ---
+        // Ahora guardamos los datos en una variable global para que el filtro SFW/NSFW funcione rápido
         function setupPortfolioListener() {
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
-                portfolioData = [];
+                const items = [];
                 snapshot.forEach((doc) => {
-                    portfolioData.push({ id: doc.id, ...doc.data() });
+                    items.push({ id: doc.id, ...doc.data() });
                 });
-                renderPortfolio(); // Renderizar con el estado actual (SFW/NSFW)
+                // Guardamos los datos en window para que el script normal pueda acceder
+                window.portfolioData = items;
                 
-                // Si estamos en modo admin, actualizar también la lista de gestión
+                // Renderizamos
+                if (typeof window.renderPortfolio === 'function') {
+                    window.renderPortfolio();
+                }
+
+                // Actualizar lista de admin si corresponde
                 if (currentUser && currentUser.uid === ADMIN_UID) {
-                    renderAdminPortfolioList();
+                    renderAdminPortfolioList(items);
                 }
             });
         }
         setupPortfolioListener();
-
-        // Renderiza la galería pública basada en el modo actual
-        function renderPortfolio() {
-            const grid = document.getElementById('portfolio-grid');
-            const existingDynamic = document.querySelectorAll('.dynamic-item');
-            existingDynamic.forEach(e => e.remove());
-
-            const staticItems = Array.from(document.querySelectorAll('.static-portfolio-item'));
-            // Ocultar estáticos si estamos en modo NSFW y queremos limpieza, o dejarlos.
-            // Por simplicidad, los items estáticos se quedan siempre visibles o podemos filtrarlos también.
-            // Para este ejemplo, ocultaremos los estáticos "hardcoded" si estamos en modo NSFW para dar prioridad al contenido dinámico.
-            // O mejor: simplemente filtramos lo que viene de Firebase.
-
-            portfolioData.forEach((item) => {
-                // FILTRO LÓGICO:
-                // Si isNSFW es falso, SOLO mostrar items donde item.nsfw NO sea true.
-                // Si isNSFW es verdadero, mostrar TODO (o solo NSFW, según prefieras).
-                // Aquí: SFW muestra solo SFW. NSFW muestra TODO.
-                if (!isNSFW && item.nsfw) return; 
-
-                const div = document.createElement('div');
-                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
-                
-                // Borde rojo sutil para items NSFW en modo admin para distinguirlos
-                if(item.nsfw) div.classList.add("border-2", "border-red-500");
-
-                div.innerHTML = `
-                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
-                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
-                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
-                    </div>
-                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
-                `;
-                // Insertar antes de los estáticos
-                grid.insertBefore(div, grid.firstChild); 
-            });
-        }
 
         // --- FUNCIONES ADMIN ---
         window.loginAdmin = async () => {
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
             const btn = document.getElementById('login-btn');
+            
             btn.innerText = "Verificando...";
             try {
                 await signInWithEmailAndPassword(auth, email, pass);
@@ -151,6 +118,7 @@
             
             const file = document.getElementById('art-file').files[0];
             const title = document.getElementById('art-title').value;
+            // Nuevo: Checkbox NSFW
             const isNsfw = document.getElementById('art-nsfw').checked;
             const status = document.getElementById('upload-status');
 
@@ -167,15 +135,14 @@
                 await addDoc(collection(db, "portfolio"), {
                     title: title || "Sin título",
                     imageUrl: url,
-                    nsfw: isNsfw,
-                    storagePath: snapshot.metadata.fullPath, // Guardamos la ruta para poder borrarlo luego
+                    nsfw: isNsfw, // Guardamos si es NSFW
+                    storagePath: snapshot.metadata.fullPath,
                     createdAt: serverTimestamp()
                 });
                 
                 status.innerText = "¡Publicado con éxito!";
                 status.className = "text-green-500 text-xs font-bold mt-2 text-center";
                 
-                // Limpiar
                 document.getElementById('art-file').value = "";
                 document.getElementById('art-title').value = "";
                 document.getElementById('art-nsfw').checked = false;
@@ -187,13 +154,13 @@
             }
         };
 
-        // Renderiza la lista de gestión en el panel admin
-        function renderAdminPortfolioList() {
+        // Renderizar lista para borrar en admin
+        function renderAdminPortfolioList(items) {
             const list = document.getElementById('admin-portfolio-list');
             if(!list) return;
             list.innerHTML = '';
             
-            portfolioData.forEach(item => {
+            items.forEach(item => {
                 const div = document.createElement('div');
                 div.className = "flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200";
                 div.innerHTML = `
@@ -212,31 +179,21 @@
             });
         }
 
-        // Función global para borrar arte
         window.deleteArt = async (docId, storagePath) => {
-            if(!confirm("¿Seguro que quieres borrar esta imagen permanentemente?")) return;
-            
+            if(!confirm("¿Seguro que quieres borrar esta imagen?")) return;
             try {
-                // 1. Borrar documento de la DB
                 await deleteDoc(doc(db, "portfolio", docId));
-                
-                // 2. Borrar imagen del Storage (Si tiene path guardado)
                 if (storagePath) {
                     const imgRef = ref(storage, storagePath);
-                    await deleteObject(imgRef).catch(err => console.log("Imagen ya borrada o no encontrada", err));
+                    await deleteObject(imgRef).catch(e => console.log("Img ya borrada"));
                 }
-                
-                // La UI se actualizará sola gracias al onSnapshot
-            } catch(e) {
-                alert("Error borrando: " + e.message);
-            }
+            } catch(e) { alert("Error: " + e.message); }
         }
 
         function initAdminPanel() {
             document.getElementById('admin-chat-panel').classList.remove('hidden');
             document.getElementById('chat-trigger-btn').classList.add('hidden'); 
             
-            // Cargar Chats
             const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
             onSnapshot(q, (snapshot) => {
                 const list = document.getElementById('admin-chat-list');
@@ -250,9 +207,6 @@
                     list.appendChild(div);
                 });
             });
-            
-            // Cargar Lista de Portfolio
-            renderAdminPortfolioList();
         }
 
         window.loadAdminChat = (id, name) => {
@@ -503,9 +457,7 @@
     <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
         <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
         <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <!-- Items de Firebase se cargarán aquí -->
-            
-            <!-- Items Estáticos (Tus dibujos iniciales) -->
+            <!-- ITEMS DE FIREBASE Y ESTÁTICOS SE CARGARÁN AQUÍ -->
             <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
                 <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
                     <span class="text-white font-bold text-xl">View Detail</span>
@@ -597,7 +549,6 @@
                 <div>
                     <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
                     <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
@@ -671,14 +622,12 @@
             <div id="admin-portfolio-section" class="hidden flex-1 p-10 bg-gray-50 h-full overflow-y-auto">
                 <h2 class="text-3xl font-bold mb-6 text-gray-800">Gallery Manager</h2>
                 
-                <!-- Formulario de Subida -->
                 <div class="max-w-xl bg-white border p-8 rounded-2xl shadow-lg mb-8">
                     <div class="mb-4">
                         <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Artwork Title</label>
                         <input type="text" id="art-title" class="w-full border-2 border-gray-200 p-3 rounded-lg outline-none" placeholder="e.g. Cyber Bunny">
                     </div>
                     
-                    <!-- NUEVO SWITCH NSFW -->
                     <div class="mb-4 flex items-center gap-3">
                         <label class="relative inline-flex items-center cursor-pointer">
                             <input type="checkbox" id="art-nsfw" class="sr-only peer">
@@ -695,11 +644,8 @@
                     <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
                 </div>
 
-                <!-- Lista de Imágenes para borrar -->
                 <h3 class="text-xl font-bold text-gray-700 mb-4">Manage Uploaded Art</h3>
-                <div id="admin-portfolio-list" class="space-y-3">
-                    <!-- Items se cargarán aquí -->
-                </div>
+                <div id="admin-portfolio-list" class="space-y-3"></div>
             </div>
         </div>
     </div>
@@ -735,7 +681,9 @@
             const faviconImg = document.getElementById('dynamic-favicon-img');
             
             // Re-renderizamos el portafolio con el nuevo filtro
-            renderPortfolio();
+            if (typeof window.renderPortfolio === 'function') {
+                window.renderPortfolio();
+            }
 
             if (nsfw) {
                 body.classList.add('nsfw-mode');
