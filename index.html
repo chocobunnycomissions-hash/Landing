@@ -10,7 +10,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <!-- MÓDULO DE CHAT Y FIREBASE -->
+    <!-- FIREBASE & CHAT MODULE -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
@@ -27,8 +27,11 @@
             measurementId: "G-7Z3XTYL288"
         };
 
-        // URL DE TU SCRIPT PARA NOTIFICACIONES DE CORREO
+        // URL de tu Google Script (Webhook)
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec"; 
+        
+        // --- 🔒 CONFIGURACIÓN ADMIN ---
+        const ADMIN_PASSWORD = "skai"; // <--- CAMBIA ESTA CONTRASEÑA
 
         // Inicializar Firebase
         let db, auth;
@@ -36,32 +39,36 @@
             const app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
-            console.log("🔥 Firebase Conectado: Skai Chat");
+            console.log("🔥 Firebase Conectado");
         } catch (e) { 
             console.error("Error inicializando Firebase:", e); 
         }
 
-        // --- VARIABLES DEL CHAT ---
+        // VARIABLES UI
         const chatWindow = document.getElementById('chat-window');
         const chatMessages = document.getElementById('chat-messages');
         const chatInput = document.getElementById('chat-input');
+        
         const adminPanel = document.getElementById('admin-chat-panel');
         const adminList = document.getElementById('admin-chat-list');
         const chatAdminTitle = document.getElementById('chat-admin-title');
         
         let currentUser = null;
         let currentChatId = null;
-        // Detecta modo admin si la URL termina en ?mode=admin
-        let isAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+        // Detecta si intentas entrar como admin (ej: ?mode=admin)
+        let isAdminMode = new URLSearchParams(window.location.search).get('mode') === 'admin';
 
         // --- AUTENTICACIÓN ---
         if (auth) {
             onAuthStateChanged(auth, (user) => {
                 if (user) {
                     currentUser = user;
-                    if (isAdmin) {
-                        initAdminView();
+                    
+                    // Si estamos en la URL de admin, pedimos contraseña
+                    if (isAdminMode) {
+                        checkAdminAccess();
                     } else {
+                        // Modo Cliente Normal
                         const savedChatId = localStorage.getItem('skai_chat_id');
                         if (savedChatId) {
                             currentChatId = savedChatId;
@@ -74,11 +81,21 @@
             });
         }
 
+        // --- SEGURIDAD ADMIN ---
+        function checkAdminAccess() {
+            const pass = prompt("🔒 Admin Access Required\nEnter Password:");
+            if (pass === ADMIN_PASSWORD) {
+                initAdminView();
+            } else {
+                alert("Access Denied");
+                window.location.href = window.location.pathname; // Redirigir al inicio
+            }
+        }
+
         // --- FUNCIONES DEL CHAT (CLIENTE) ---
         window.toggleChat = function() {
             chatWindow.classList.toggle('hidden');
-            // Mensaje de bienvenida PERSONAL (No Bot)
-            if (!chatWindow.classList.contains('hidden') && !currentChatId && !isAdmin) {
+            if (!chatWindow.classList.contains('hidden') && !currentChatId && !isAdminMode) {
                 if (chatMessages.children.length === 0) {
                     addMessageToUI("Skai Chocobunny", "Hi! 👋 Thanks for reaching out. Let me know what you have in mind for your commission!", false);
                 }
@@ -89,45 +106,44 @@
             const text = customText || chatInput.value.trim();
             if (!text || !currentUser || !db) return;
 
-            // 1. CREAR SESIÓN NUEVA EN LA BASE DE DATOS
-            if (!currentChatId && !isAdmin) {
+            // 1. CREAR SESIÓN NUEVA
+            if (!currentChatId && !isAdminMode) {
                 try {
                     const chatRef = await addDoc(collection(db, "chats"), {
                         clientName: "Guest " + currentUser.uid.slice(0,4),
                         createdAt: serverTimestamp(),
                         lastMessage: text,
                         lastMessageTime: serverTimestamp(),
-                        unread: true
+                        unread: true // No leído para ti
                     });
                     currentChatId = chatRef.id;
                     localStorage.setItem('skai_chat_id', currentChatId);
                     
-                    // Si viene del modal de pedido, enviamos notificación con el email del cliente
+                    // Notificar
                     if (customText && window.clientEmailForNotify) {
                         sendEmailNotification(text, currentChatId, window.clientEmailForNotify);
                     } else {
-                        // Notificación genérica si escribe directo al chat
-                        sendEmailNotification(text, currentChatId, "No email provided (Direct Chat)");
+                        sendEmailNotification(text, currentChatId, "Direct Chat");
                     }
                     
                     listenToChat(currentChatId);
                 } catch (e) { console.error("Error creando chat:", e); }
             }
 
-            // 2. GUARDAR MENSAJE
+            // 2. ENVIAR MENSAJE
             try {
                 if (currentChatId) {
                     await addDoc(collection(db, "chats", currentChatId, "messages"), {
                         text: text,
                         senderId: currentUser.uid,
-                        senderName: isAdmin ? "Skai Chocobunny" : "Client",
+                        senderName: isAdminMode ? "Skai Chocobunny" : "Client",
                         timestamp: serverTimestamp()
                     });
 
                     await setDoc(doc(db, "chats", currentChatId), {
                         lastMessage: text,
                         lastMessageTime: serverTimestamp(),
-                        unread: !isAdmin 
+                        unread: !isAdminMode 
                     }, { merge: true });
 
                     if (!customText) chatInput.value = "";
@@ -135,6 +151,7 @@
             } catch (e) { console.error("Error enviando:", e); }
         }
 
+        // ESCUCHA MENSAJES (VISTA CLIENTE)
         function listenToChat(chatId) {
             const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
             onSnapshot(q, (snapshot) => {
@@ -142,6 +159,7 @@
                 snapshot.forEach((doc) => {
                     const msg = doc.data();
                     const isMe = msg.senderId === currentUser.uid;
+                    // En vista cliente: Skai es el otro, Yo soy Yo.
                     const displayName = msg.senderName === "Skai Chocobunny" ? "Skai Chocobunny" : "You";
                     addMessageToUI(displayName, msg.text, isMe);
                 });
@@ -165,18 +183,25 @@
             chatMessages.appendChild(div);
         }
 
-        // --- MODO ADMIN ---
+        // --- MODO ADMIN (TU PANEL DE CONTROL) ---
         function initAdminView() {
+            // Ocultar elementos de cliente
             document.getElementById('chat-trigger-btn').classList.add('hidden');
+            
+            // Mostrar panel admin
             adminPanel.classList.remove('hidden');
 
+            // Cargar lista de chats
             const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
             onSnapshot(q, (snapshot) => {
                 adminList.innerHTML = '';
                 snapshot.forEach((docSnap) => {
                     const chat = docSnap.data();
                     const div = document.createElement('div');
-                    div.className = `p-4 border-b hover:bg-gray-50 cursor-pointer transition-colors ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
+                    
+                    // Estilo si hay mensajes sin leer
+                    const activeClass = chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : 'border-l-4 border-transparent';
+                    div.className = `p-4 border-b hover:bg-gray-100 cursor-pointer transition-colors ${activeClass}`;
                     
                     let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
 
@@ -185,7 +210,7 @@
                             <h4 class="font-bold text-sm text-gray-700">${chat.clientName || 'Guest'}</h4>
                             <span class="text-[10px] text-gray-400">${time}</span>
                         </div>
-                        <p class="text-xs text-gray-500 truncate mt-1">${chat.lastMessage}</p>
+                        <p class="text-xs text-gray-500 truncate mt-1 font-medium">${chat.lastMessage}</p>
                     `;
                     div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
                     adminList.appendChild(div);
@@ -196,18 +221,31 @@
         window.loadAdminChat = function(chatId, clientName) {
             currentChatId = chatId;
             chatAdminTitle.innerText = "Chatting with: " + (clientName || 'Guest');
+            
             const adminMsgArea = document.getElementById('admin-messages-area');
+            adminMsgArea.innerHTML = '<div class="text-center text-gray-400 mt-10"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+            
             const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
             
             onSnapshot(q, (snapshot) => {
                 adminMsgArea.innerHTML = '';
                 snapshot.forEach((doc) => {
                     const msg = doc.data();
-                    const isMe = msg.senderId === currentUser.uid;
+                    
+                    // LÓGICA VISUAL ADMIN:
+                    // Si el senderName es "Skai Chocobunny", soy YO (Derecha).
+                    // Si no, es el CLIENTE (Izquierda).
+                    const isMe = msg.senderName === "Skai Chocobunny";
+                    
                     const div = document.createElement('div');
                     div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-3`;
+                    
+                    const bubbleStyle = isMe 
+                        ? 'bg-[var(--color-primary)] text-white' 
+                        : 'bg-white border border-gray-200 text-gray-800';
+
                     div.innerHTML = `
-                        <div class="${isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-white border border-gray-200 text-gray-800'} px-4 py-2 rounded-2xl max-w-[70%] shadow-sm text-sm">${msg.text}</div>
+                        <div class="${bubbleStyle} px-4 py-2 rounded-2xl max-w-[70%] shadow-sm text-sm">${msg.text}</div>
                         <span class="text-[10px] text-gray-400 mt-1">${isMe ? 'You' : 'Client'}</span>
                     `;
                     adminMsgArea.appendChild(div);
@@ -215,21 +253,36 @@
                 adminMsgArea.scrollTop = adminMsgArea.scrollHeight;
             });
 
+            // Configurar el input del admin
             const adminInput = document.getElementById('admin-chat-input');
             const adminSendBtn = document.getElementById('admin-send-btn');
             
+            // Reemplazamos el onclick para evitar múltiples listeners
+            adminSendBtn.onclick = null;
+            adminInput.onkeypress = null;
+
             const sendAdminMsg = async () => {
                 const text = adminInput.value.trim();
                 if(!text) return;
+                
+                // Enviar como Skai
                 await addDoc(collection(db, "chats", currentChatId, "messages"), {
                     text: text,
-                    senderId: currentUser.uid,
-                    senderName: "Skai Chocobunny",
+                    senderId: currentUser.uid, // ID de admin
+                    senderName: "Skai Chocobunny", // Nombre forzado
                     timestamp: serverTimestamp()
                 });
-                await setDoc(doc(db, "chats", currentChatId), { lastMessage: text, lastMessageTime: serverTimestamp(), unread: false }, { merge: true });
+                
+                // Marcar como LEÍDO porque acabas de responder
+                await setDoc(doc(db, "chats", currentChatId), { 
+                    lastMessage: text, 
+                    lastMessageTime: serverTimestamp(), 
+                    unread: false 
+                }, { merge: true });
+                
                 adminInput.value = "";
             };
+
             adminSendBtn.onclick = sendAdminMsg;
             adminInput.onkeypress = (e) => { if(e.key === 'Enter') sendAdminMsg(); };
         }
@@ -351,6 +404,10 @@
 
         .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        
+        /* SCROLLBARS */
+        #chat-messages::-webkit-scrollbar, #admin-chat-list::-webkit-scrollbar, #admin-messages-area::-webkit-scrollbar { width: 6px; }
+        #chat-messages::-webkit-scrollbar-thumb, #admin-chat-list::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
     </style>
 </head>
 <body class="antialiased relative">
@@ -788,29 +845,8 @@
             document.getElementById('total').innerText = '$' + total.toFixed(0);
         }
 
-        // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
-        function openOrderModal() {
-            // Actualizar datos del modal con lo seleccionado en la calculadora
-            const typeSelect = document.getElementById('type');
-            const bgSelect = document.getElementById('bg');
-            const extraCheck = document.getElementById('extra');
-            const totalText = document.getElementById('total').innerText;
-
-            document.getElementById('modal-type').innerText = typeSelect.options[typeSelect.selectedIndex].text;
-            document.getElementById('modal-bg').innerText = bgSelect.options[bgSelect.selectedIndex].text;
-            document.getElementById('modal-extra').innerText = extraCheck.checked ? "Yes" : "No";
-            document.getElementById('modal-total').innerText = totalText;
-
-            // Mostrar modal
-            document.getElementById('order-summary-modal').classList.remove('hidden');
-        }
-
-        function closeOrderModal() {
-            document.getElementById('order-summary-modal').classList.add('hidden');
-        }
-
-        // OPCIÓN 1: IR A GOOGLE FORM (Manteniendo lógica anterior)
-        function proceedToForm() {
+        function goToForm(e) {
+            e.preventDefault();
             const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
             const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
             const config = isNSFW ? NSFW_CONFIG : SFW_CONFIG;
@@ -823,7 +859,6 @@
             let typeText = "", bgText = "";
             let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
 
-            // LOGICA DE TEXTOS IGUAL QUE ANTES (Simplificada visualmente aquí)
             if (!isNSFW) {
                 if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
                 if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
@@ -840,42 +875,8 @@
                 if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
             }
 
-            // AQUI AGREGAMOS EL EMAIL SI LO ESCRIBIERON EN EL MODAL (Opcional si el form ya lo pide)
-            // const email = document.getElementById('order-email').value;
-            // Podríamos añadirlo a la URL si tuvieras el ID del campo Email del form
-
             const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
-            
-            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW."); } 
-            else { 
-                closeOrderModal();
-                window.open(finalURL, '_blank'); 
-            }
-        }
-
-        // OPCIÓN 2: IR AL CHAT (Nueva funcionalidad)
-        function proceedToChat() {
-            const email = document.getElementById('order-email').value;
-            if (!email) {
-                alert("Please enter your email so I can notify you about your order status.");
-                return;
-            }
-
-            // Recopilar datos para el mensaje inicial
-            const typeText = document.getElementById('modal-type').innerText;
-            const bgText = document.getElementById('modal-bg').innerText;
-            const extraText = document.getElementById('modal-extra').innerText;
-            const totalText = document.getElementById('modal-total').innerText;
-
-            const initialMessage = `Hi Skai! I'd like to discuss a commission request:\n- Type: ${typeText}\n- Background: ${bgText}\n- Extra Char: ${extraText}\n- Estimate: ${totalText}\n\nMy contact email is: ${email}`;
-
-            // Guardar email globalmente para usarlo en la notificación
-            window.clientEmailForNotify = email;
-
-            closeOrderModal();
-            // Abrir chat y enviar mensaje automático
-            document.getElementById('chat-window').classList.remove('hidden');
-            window.sendMessage(initialMessage);
+            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
         }
     </script>
 </body>
