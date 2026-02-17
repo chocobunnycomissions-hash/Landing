@@ -5,21 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skai Chocobunny | Digital Artist</title>
     
-    <!-- FAVICON -->
-    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_simple.svg">
 
-    <!-- ESTILOS Y FUENTES -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
+    <!-- FIREBASE, CHAT & STORAGE MODULE -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
-        // --- TUS CREDENCIALES REALES ---
+        // --- 1. CONFIGURACIÓN DE FIREBASE (Skai Chat) ---
         const firebaseConfig = {
             apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
             authDomain: "skai-chat-4eeab.firebaseapp.com",
@@ -30,41 +28,69 @@
             measurementId: "G-7Z3XTYL288"
         };
 
+        // --- 2. CONFIGURACIÓN DE SEGURIDAD (Tú eres el único admin) ---
         const ADMIN_UID = "6lYsULY3Opci9OHviBdZbedCrKn1"; 
+        
+        // --- 3. WEBHOOK DE GOOGLE SCRIPT (Notificaciones) ---
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
 
-        // Inicializar
+        // Inicializar Servicios
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
         const storage = getStorage(app);
 
+        // Variables Globales
         let currentUser = null;
         let currentChatId = null;
+        
+        // Elementos UI
+        const chatWindow = document.getElementById('chat-window');
+        const chatMessages = document.getElementById('chat-messages');
+        const chatInput = document.getElementById('chat-input');
+        const adminPanel = document.getElementById('admin-chat-panel');
+        const loginModal = document.getElementById('admin-login-modal');
+        const portfolioGrid = document.getElementById('portfolio-grid');
 
-        // --- SISTEMA DE AUTENTICACIÓN ---
+        // Detectar si estamos intentando entrar al modo admin
+        const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+
+        // --- SISTEMA DE AUTENTICACIÓN (LÓGICA CORREGIDA) ---
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
-            const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
 
             if (user) {
+                // HAY UN USUARIO CONECTADO
                 if (user.uid === ADMIN_UID) {
+                    // CASO 1: Eres el Admin real
                     if (wantsAdmin) {
-                        document.getElementById('admin-login-modal').classList.add('hidden');
+                        loginModal.classList.add('hidden'); 
                         initAdminPanel();
                     }
                 } else {
-                    const savedChatId = localStorage.getItem('skai_chat_id');
-                    if (savedChatId) {
-                        currentChatId = savedChatId;
-                        listenToChat(currentChatId);
+                    // CASO 2: Eres un cliente (o tú mismo disfrazado de cliente anónimo)
+                    if (wantsAdmin) {
+                        // ¡AQUÍ ESTABA EL ERROR! 
+                        // Si pides admin pero eres cliente, forzamos mostrar el login
+                        // para que puedas cambiar de cuenta.
+                        document.getElementById('admin-login-modal').classList.remove('hidden');
+                    } else {
+                        // Si no pides admin, carga el chat normal
+                        const savedChatId = localStorage.getItem('skai_chat_id');
+                        if (savedChatId) {
+                            currentChatId = savedChatId;
+                            listenToChat(currentChatId);
+                        }
                     }
                 }
             } else {
+                // NADIE CONECTADO
                 if (wantsAdmin) {
+                    // Si pides admin, muestra login
                     document.getElementById('admin-login-modal').classList.remove('hidden');
                 } else {
-                    signInAnonymously(auth);
+                    // Si no, te convierte en cliente anónimo
+                    signInAnonymously(auth).catch(e => console.error(e));
                 }
             }
         });
@@ -74,16 +100,15 @@
             const grid = document.getElementById('portfolio-grid');
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
-                // Mantenemos los items estáticos si los hubiera, o limpiamos para cargar lo nuevo
-                // Para no borrar lo que ya tienes hardcodeado abajo, lo manejaremos así:
-                // Buscamos solo los elementos dinámicos para no duplicar los estáticos
+                // Limpiamos solo los dinámicos para no duplicar
                 const existingDynamic = document.querySelectorAll('.dynamic-item');
                 existingDynamic.forEach(e => e.remove());
 
+                // Mantenemos referencia a los estáticos
                 const staticItems = Array.from(document.querySelectorAll('.static-portfolio-item'));
-                grid.innerHTML = ''; // Limpiamos para reordenar
+                grid.innerHTML = ''; 
 
-                // 1. Añadir dinámicos (nuevos)
+                // 1. Añadir dinámicos (nuevos de Firebase)
                 snapshot.forEach((doc) => {
                     const item = doc.data();
                     const div = document.createElement('div');
@@ -97,22 +122,32 @@
                     grid.appendChild(div);
                 });
 
-                // 2. Añadir estáticos (viejos) al final
+                // 2. Volver a poner los estáticos al final
                 staticItems.forEach(item => grid.appendChild(item));
             });
         }
         loadPortfolio();
 
-        // --- FUNCIONES ADMIN ---
+        // --- FUNCIONES ADMIN (Login/Upload) ---
         window.loginAdmin = async () => {
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
+            const btn = document.getElementById('login-btn');
+            
+            btn.innerText = "Verificando...";
+            
             try {
                 await signInWithEmailAndPassword(auth, email, pass);
-            } catch (e) { alert("Error: " + e.message); }
+                // Si funciona, onAuthStateChanged se disparará de nuevo y cargará el panel
+            } catch (e) { 
+                alert("Error de acceso: " + e.message); 
+                btn.innerText = "Entrar";
+            }
         };
 
         window.uploadArt = async () => {
+            if (currentUser.uid !== ADMIN_UID) return; 
+            
             const file = document.getElementById('art-file').files[0];
             const title = document.getElementById('art-title').value;
             if (!file) return alert("Selecciona un archivo");
@@ -132,12 +167,13 @@
                 });
                 status.innerText = "¡Publicado con éxito!";
                 document.getElementById('art-file').value = "";
+                setTimeout(() => status.innerText = "", 3000);
             } catch (e) { status.innerText = "Error: " + e.message; }
         };
 
         function initAdminPanel() {
             document.getElementById('admin-chat-panel').classList.remove('hidden');
-            document.getElementById('chat-trigger-btn').classList.add('hidden'); // Ocultar chat cliente en modo admin
+            document.getElementById('chat-trigger-btn').classList.add('hidden'); 
             
             const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
             onSnapshot(q, (snapshot) => {
@@ -147,7 +183,16 @@
                     const chat = docSnap.data();
                     const div = document.createElement('div');
                     div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
-                    div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
+                    
+                    let time = chat.lastMessageTime ? new Date(chat.lastMessageTime.seconds * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+
+                    div.innerHTML = `
+                        <div class="flex justify-between">
+                            <span class="font-bold text-gray-700">${chat.clientName}</span>
+                            <span class="text-xs text-gray-400">${time}</span>
+                        </div>
+                        <p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>
+                    `;
                     div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
                     list.appendChild(div);
                 });
@@ -157,9 +202,10 @@
         window.loadAdminChat = (id, name) => {
             currentChatId = id;
             document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
+            const area = document.getElementById('admin-messages-area');
+            
             const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
             onSnapshot(q, (snapshot) => {
-                const area = document.getElementById('admin-messages-area');
                 area.innerHTML = '';
                 snapshot.forEach(d => {
                     const m = d.data();
@@ -189,7 +235,7 @@
                     currentChatId = chatRef.id;
                     localStorage.setItem('skai_chat_id', currentChatId);
                     listenToChat(currentChatId);
-                    // Notificación Webhook
+                    
                     const emailForNotify = window.clientEmailForNotify || "Direct Chat";
                     fetch(NOTIFICATION_WEBHOOK, { method: 'POST', mode: 'no-cors', body: JSON.stringify({message: msg, chatId: currentChatId, type: 'chat_order', email: emailForNotify}) });
                 } catch (e) { console.error("Error creating chat", e); }
@@ -229,8 +275,8 @@
             });
         }
         
-        // Exponer funciones al window
         window.toggleChat = () => document.getElementById('chat-window').classList.toggle('hidden');
+        
         window.switchAdminTab = (tab) => {
             document.getElementById('admin-chat-section').classList.toggle('hidden', tab !== 'chat');
             document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
@@ -239,17 +285,38 @@
         // Admin Send
         const adminInput = document.getElementById('admin-chat-input');
         if(adminInput) {
-            adminInput.addEventListener('keypress', (e) => {
-                if(e.key === 'Enter') {
-                    const txt = adminInput.value.trim();
-                    if(txt) { window.sendMessage(txt); adminInput.value = ''; }
+            const sendAdmin = async () => {
+                const txt = adminInput.value.trim();
+                if(txt) { 
+                    // Enviar como Admin
+                    await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                        text: txt,
+                        senderId: currentUser.uid,
+                        senderName: "Skai",
+                        timestamp: serverTimestamp()
+                    });
+                    // Actualizar ultimo mensaje
+                    await setDoc(doc(db, "chats", currentChatId), {
+                        lastMessage: txt,
+                        lastMessageTime: serverTimestamp(),
+                        unread: false // Leído porque respondiste tú
+                    }, { merge: true });
+                    
+                    adminInput.value = ''; 
                 }
+            };
+            
+            document.getElementById('admin-send-btn').onclick = sendAdmin;
+            adminInput.addEventListener('keypress', (e) => {
+                if(e.key === 'Enter') sendAdmin();
             });
         }
-        document.getElementById('admin-send-btn').onclick = () => {
-             const txt = document.getElementById('admin-chat-input').value.trim();
-             if(txt) { window.sendMessage(txt); document.getElementById('admin-chat-input').value = ''; }
-        };
+
+        // Logout
+        window.logoutAdmin = async () => { 
+            await signOut(auth); 
+            window.location.href = window.location.pathname; // Recargar página limpia
+        }
 
         // Chat Input Enter
         document.getElementById('chat-input').addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
@@ -284,6 +351,9 @@
         #mobile-menu.open { max-height: 300px; }
         .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        /* Scrollbars */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
     </style>
 </head>
 <body class="antialiased relative">
@@ -301,17 +371,13 @@
 
     <!-- 2. AGE VERIFICATION MODAL -->
     <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
-        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center transform scale-100 transition-transform">
+        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center">
             <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
             <h3 class="text-3xl font-bold mb-2">NSFW Content Warning</h3>
-            <p class="mb-6 text-gray-300">This section contains adult content. You must be 18 years or older to proceed.</p>
+            <p class="mb-6 text-gray-300">Contains adult content. Are you 18+?</p>
             <div class="flex flex-col gap-3">
-                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold transition-colors">
-                    YES, I am 18+ <span class="text-xs block font-normal">(Enter Dark Mode)</span>
-                </button>
-                <button onclick="closeModal()" class="bg-transparent border border-gray-600 hover:bg-gray-800 text-gray-400 py-2 px-6 rounded-xl font-bold transition-colors">
-                    No, take me back
-                </button>
+                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold">YES, I am 18+</button>
+                <button onclick="closeModal()" class="bg-transparent border border-gray-600 text-gray-400 py-2 px-6 rounded-xl font-bold">No, take me back</button>
             </div>
         </div>
     </div>
@@ -352,9 +418,7 @@
                 <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
             </div>
             
-            <button class="md:hidden text-[var(--text-main)] focus:outline-none" onclick="toggleMenu()">
-                <i class="fas fa-bars text-2xl"></i>
-            </button>
+            <button class="md:hidden text-[var(--text-main)] focus:outline-none" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
 
             <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
                 <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
@@ -378,9 +442,6 @@
 
     <!-- Hero Section -->
     <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
-        <div class="absolute top-10 left-10 text-white/30 text-8xl"><i class="fas fa-heart"></i></div>
-        <div class="absolute bottom-10 right-10 text-white/30 text-8xl"><i class="fas fa-star"></i></div>
-
         <div class="max-w-4xl mx-auto relative z-10">
             <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
                 <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
@@ -537,67 +598,6 @@
         </div>
     </section>
 
-    <!-- TOS -->
-    <section id="tos" class="py-20 px-6 relative bg-[var(--bg-card)]">
-        <div class="max-w-4xl mx-auto relative z-10">
-            <h2 class="text-4xl font-bold mb-12 text-center text-[var(--color-secondary-dark)]">Terms of Service</h2>
-            <div class="grid md:grid-cols-2 gap-12">
-                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
-                    <h4 class="text-xl font-bold mb-4 text-[var(--color-primary-dark)]"><i class="fas fa-user-shield mr-2"></i> General Rules</h4>
-                    <ul class="space-y-2 opacity-80 text-sm">
-                        <li>• Payment via PayPal only (USD).</li>
-                        <li>• 50% or 100% upfront payment.</li>
-                        <li>• I have the right to refuse any request.</li>
-                    </ul>
-                </div>
-                <div class="bg-[var(--bg-body)] p-6 rounded-2xl border border-gray-200/10">
-                    <h4 class="text-xl font-bold mb-4 text-[var(--color-secondary-dark)]"><i class="fas fa-paint-brush mr-2"></i> Content Rules</h4>
-                    <ul class="space-y-2 opacity-80 text-sm">
-                        <li>• For personal use only.</li>
-                        <li>• Do not claim the art as your own.</li>
-                        <li>• <b class="text-[var(--color-accent)]">NSFW available via button above.</b></li>
-                        <li>• <b>No Mechas / Robots.</b></li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Contact Section -->
-    <section id="contact" class="py-20 px-6 text-center bg-gradient-to-b from-[var(--bg-body)] to-[var(--color-secondary)]/10">
-        <h2 class="text-4xl font-bold mb-8 text-[var(--text-main)]">Ready to start?</h2>
-        <p class="text-xl mb-8 opacity-70 max-w-2xl mx-auto">Please fill out the form above or send me a DM. I usually reply within 24 hours.</p>
-        
-        <div class="flex justify-center gap-6 flex-wrap">
-            <button onclick="openOrderModal()" class="btn-primary px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 cursor-pointer">
-                <i class="fas fa-clipboard-list"></i> Order Now
-            </button>
-            <a href="https://twitter.com" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white px-10 py-5 rounded-full text-xl font-bold shadow-xl flex items-center gap-3 transition-colors">
-                <i class="fab fa-twitter"></i> Twitter DM
-            </a>
-        </div>
-    </section>
-
-    <footer class="py-10 bg-[var(--color-secondary-dark)] text-white text-center">
-        <p class="font-medium opacity-90">© 2024 Skai Chocobunny Art. All rights reserved.</p>
-    </footer>
-
-    <!-- CLIENT CHAT UI -->
-    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
-        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white"><i class="fas fa-comment-dots text-2xl"></i></div>
-    </div>
-
-    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
-        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
-            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
-        </div>
-        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
-        <div class="p-3 border-t border-gray-100 bg-white flex gap-2">
-            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
-            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
-        </div>
-    </div>
-
     <!-- ADMIN PANEL -->
     <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
         <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
@@ -644,7 +644,23 @@
         </div>
     </div>
 
+    <!-- CLIENT CHAT BUTTON & WINDOW -->
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
+        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white"><i class="fas fa-comment-dots text-2xl"></i></div>
+    </div>
+    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
+        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
+            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
+        <div class="p-3 border-t bg-white flex gap-2">
+            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
+            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
+        </div>
+    </div>
+
     <script>
+        // LOGICA DE SCRIPT: Formulario, Toggle SFW/NSFW y Calculadora
         let isNSFW = false;
 
         function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
