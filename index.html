@@ -6,937 +6,297 @@
     <title>Skai Chocobunny | Digital Artist</title>
     
     <!-- FAVICON -->
-    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐰</text></svg>">
 
     <!-- ESTILOS Y FUENTES -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-
-        // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
-        const firebaseConfigRaw = {
-            apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
-            authDomain: "skai-chat-4eeab.firebaseapp.com",
-            projectId: "skai-chat-4eeab",
-            storageBucket: "skai-chat-4eeab.firebasestorage.app",
-            messagingSenderId: "881808601018",
-            appId: "1:881808601018:web:a0c47a21765bb3fdda7783",
-            measurementId: "G-7Z3XTYL288"
-        };
-        
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfigRaw;
-        // ID de la App para las rutas protegidas
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'skai-default';
-
-        const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
-        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
-
-        // Inicializar
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-
-        let currentUser = null;
-        let currentChatId = null;
-        let unsubscribePortfolio = null;
-
-        // --- AUTH INIT (Manejo robusto de tokens) ---
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Auth Error:", error);
-            }
-        };
-
-        // --- SISTEMA DE AUTENTICACIÓN ---
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
-
-            if (user) {
-                // Solo cargamos datos cuando estamos seguros de que hay usuario
-                setupPortfolioListener();
-
-                if (user.uid === ADMIN_UID) {
-                    if (wantsAdmin) {
-                        document.getElementById('admin-login-modal').classList.add('hidden');
-                        initAdminPanel();
-                    }
-                } else {
-                    if (wantsAdmin) {
-                        document.getElementById('admin-login-modal').classList.remove('hidden');
-                    } else {
-                        const savedChatId = localStorage.getItem('skai_chat_id');
-                        if (savedChatId) {
-                            currentChatId = savedChatId;
-                            listenToChat(currentChatId);
-                        }
-                    }
-                }
-            } else {
-                // Si se desconecta, limpiamos listeners
-                if (unsubscribePortfolio) unsubscribePortfolio();
-                if (wantsAdmin) document.getElementById('admin-login-modal').classList.remove('hidden');
-            }
-        });
-
-        // Llamada inicial de Auth
-        initAuth();
-
-        // --- RUTAS SEGURAS (HELPER) ---
-        const getPublicCollection = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
-        const getPublicDoc = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
-
-        // --- CARGA DINÁMICA DE PORTAFOLIO ---
-        function setupPortfolioListener() {
-            if (!currentUser) return;
-            if (unsubscribePortfolio) unsubscribePortfolio();
-
-            // Usamos la ruta segura 'artifacts/{appId}/public/data/portfolio'
-            const q = query(getPublicCollection("portfolio")); // Quitamos orderBy temporalmente para evitar error de índice
-            
-            unsubscribePortfolio = onSnapshot(q, (snapshot) => {
-                const items = [];
-                snapshot.forEach((doc) => {
-                    items.push({ id: doc.id, ...doc.data() });
-                });
-                
-                // Ordenar en cliente (JS) para evitar requerir índices compuestos complejos
-                items.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-
-                window.portfolioData = items;
-                
-                if (typeof window.renderPortfolio === 'function') {
-                    window.renderPortfolio();
-                }
-
-                if (currentUser && currentUser.uid === ADMIN_UID) {
-                    renderAdminPortfolioList(items);
-                }
-            }, (error) => {
-                console.error("Error leyendo portafolio:", error);
-            });
-        }
-
-        function renderPortfolio() {
-            const grid = document.getElementById('portfolio-grid');
-            const existingDynamic = document.querySelectorAll('.dynamic-item');
-            existingDynamic.forEach(e => e.remove());
-
-            const data = window.portfolioData || [];
-
-            data.forEach((item) => {
-                if (!isNSFW && item.nsfw) return; 
-
-                const div = document.createElement('div');
-                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
-                
-                if(item.nsfw) div.classList.add("border-2", "border-red-500");
-
-                div.innerHTML = `
-                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
-                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
-                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
-                    </div>
-                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
-                `;
-                grid.insertBefore(div, grid.firstChild); 
-            });
-        }
-
-        // --- FUNCIONES ADMIN ---
-        window.loginAdmin = async () => {
-            const email = document.getElementById('admin-email').value;
-            const pass = document.getElementById('admin-pass').value;
-            const btn = document.getElementById('login-btn');
-            
-            btn.innerText = "Verificando...";
-            try {
-                await signInWithEmailAndPassword(auth, email, pass);
-            } catch (e) { 
-                alert("Error de acceso: " + e.message); 
-                btn.innerText = "Entrar";
-            }
-        };
-
-        // --- COMPRESIÓN DE IMAGEN ---
-        function compressImage(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = (event) => {
-                    const img = new Image();
-                    img.src = event.target.result;
-                    img.onload = () => {
-                        const canvas = document.createElement('canvas');
-                        const ctx = canvas.getContext('2d');
-                        const MAX_WIDTH = 800;
-                        const MAX_HEIGHT = 800;
-                        let width = img.width;
-                        let height = img.height;
-                        if (width > height) {
-                            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-                        } else {
-                            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-                        }
-                        canvas.width = width;
-                        canvas.height = height;
-                        ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/jpeg', 0.7));
-                    };
-                    img.onerror = reject;
-                };
-                reader.onerror = reject;
-            });
-        }
-
-        // --- SUBIDA DE ARTE ---
-        window.uploadArt = async () => {
-            if (currentUser.uid !== ADMIN_UID) return; 
-            
-            const file = document.getElementById('art-file').files[0];
-            const title = document.getElementById('art-title').value;
-            const isNsfw = document.getElementById('art-nsfw').checked;
-            const status = document.getElementById('upload-status');
-
-            if (!file) { alert("Por favor selecciona un archivo."); return; }
-
-            status.innerText = "Procesando...";
-            status.className = "text-blue-500 text-xs font-bold mt-2 text-center";
-
-            try {
-                const base64Image = await compressImage(file);
-                
-                // Usamos ruta segura
-                await addDoc(getPublicCollection("portfolio"), {
-                    title: title || "Sin título",
-                    imageUrl: base64Image,
-                    nsfw: isNsfw, 
-                    storagePath: null,
-                    createdAt: serverTimestamp()
-                });
-                
-                status.innerText = "¡Listo!";
-                status.className = "text-green-500 text-xs font-bold mt-2 text-center";
-                
-                document.getElementById('art-file').value = "";
-                document.getElementById('art-title').value = "";
-                setTimeout(() => status.innerText = "", 3000);
-
-            } catch (e) { 
-                console.error("Error upload:", e);
-                status.innerText = "Error: " + e.message; 
-                status.className = "text-red-500 text-xs font-bold mt-2 text-center";
-            }
-        };
-
-        function renderAdminPortfolioList(items) {
-            const list = document.getElementById('admin-portfolio-list');
-            if(!list) return;
-            list.innerHTML = '';
-            
-            items.forEach(item => {
-                const div = document.createElement('div');
-                div.className = "flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200";
-                div.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <img src="${item.imageUrl}" class="w-12 h-12 object-cover rounded bg-white">
-                        <div>
-                            <p class="font-bold text-sm text-gray-700 truncate w-32">${item.title}</p>
-                            <span class="text-xs ${item.nsfw ? 'text-red-500 font-bold' : 'text-green-500'}">${item.nsfw ? 'NSFW' : 'SFW'}</span>
-                        </div>
-                    </div>
-                    <button class="text-red-400 hover:text-red-600 bg-white p-2 rounded-full shadow-sm border border-gray-100 hover:bg-red-50" onclick="deleteArt('${item.id}', null)">
-                        <i class="fas fa-trash-alt"></i>
-                    </button>
-                `;
-                list.appendChild(div);
-            });
-        }
-
-        window.deleteArt = async (docId, storagePath) => {
-            if(!confirm("¿Borrar imagen?")) return;
-            try {
-                await deleteDoc(getPublicDoc("portfolio", docId));
-            } catch(e) { alert("Error: " + e.message); }
-        }
-
-        function initAdminPanel() {
-            document.getElementById('admin-chat-panel').classList.remove('hidden');
-            document.getElementById('chat-trigger-btn').classList.add('hidden'); 
-            
-            // Usar ruta segura para chats
-            const q = query(getPublicCollection("chats")); // Sin orderBy para evitar errores iniciales
-            
-            onSnapshot(q, (snapshot) => {
-                const list = document.getElementById('admin-chat-list');
-                list.innerHTML = '';
-                const chats = [];
-                snapshot.forEach(d => chats.push({id: d.id, ...d.data()}));
-                // Ordenar chats en cliente
-                chats.sort((a,b) => (b.lastMessageTime?.seconds || 0) - (a.lastMessageTime?.seconds || 0));
-
-                chats.forEach(chat => {
-                    const div = document.createElement('div');
-                    div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
-                    div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
-                    div.onclick = () => loadAdminChat(chat.id, chat.clientName);
-                    list.appendChild(div);
-                });
-            });
-            if(window.portfolioData) renderAdminPortfolioList(window.portfolioData);
-        }
-
-        window.loadAdminChat = (id, name) => {
-            currentChatId = id;
-            document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
-            const area = document.getElementById('admin-messages-area');
-            
-            // Ruta segura para mensajes: 'chats' -> doc -> 'messages'
-            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
-            const q = query(msgsRef, orderBy("timestamp", "asc"));
-
-            onSnapshot(q, (snapshot) => {
-                area.innerHTML = '';
-                snapshot.forEach(d => {
-                    const m = d.data();
-                    const isMe = m.senderId === ADMIN_UID;
-                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
-                        <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border border-gray-200'} px-3 py-2 rounded-lg text-sm shadow-sm">${m.text}</div>
-                    </div>`;
-                });
-                area.scrollTop = area.scrollHeight;
-            }, (err) => {
-                // Si falla por índice, intenta sin orderBy y ordena en cliente
-                console.warn("Intentando fallback sin orderby...", err);
-                const q2 = query(msgsRef);
-                onSnapshot(q2, (snap) => {
-                    area.innerHTML = '';
-                    const msgs = [];
-                    snap.forEach(d => msgs.push(d.data()));
-                    msgs.sort((a,b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
-                    msgs.forEach(m => {
-                        const isMe = m.senderId === ADMIN_UID;
-                        area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
-                            <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border border-gray-200'} px-3 py-2 rounded-lg text-sm shadow-sm">${m.text}</div>
-                        </div>`;
-                    });
-                });
-            });
-        };
-
-        window.sendMessage = async (textOverride = null) => {
-            const input = document.getElementById('chat-input');
-            const msg = textOverride || input.value.trim();
-            if (!msg) return;
-
-            if (!currentChatId) {
-                try {
-                    // Ruta segura
-                    const chatRef = await addDoc(getPublicCollection("chats"), {
-                        clientName: "Cliente " + currentUser.uid.slice(0,4),
-                        lastMessage: msg,
-                        lastMessageTime: serverTimestamp(),
-                        unread: true
-                    });
-                    currentChatId = chatRef.id;
-                    localStorage.setItem('skai_chat_id', currentChatId);
-                    listenToChat(currentChatId);
-                    
-                    const emailForNotify = window.clientEmailForNotify || "Direct Chat";
-                    fetch(NOTIFICATION_WEBHOOK, { method: 'POST', mode: 'no-cors', body: JSON.stringify({message: msg, chatId: currentChatId, type: 'chat_order', email: emailForNotify}) });
-                } catch (e) { console.error("Error creating chat", e); }
-            }
-
-            if (currentChatId) {
-                const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', currentChatId, 'messages');
-                await addDoc(msgsRef, {
-                    text: msg,
-                    senderId: currentUser.uid,
-                    senderName: currentUser.uid === ADMIN_UID ? "Skai" : "Cliente",
-                    timestamp: serverTimestamp()
-                });
-
-                await setDoc(getPublicDoc("chats", currentChatId), {
-                    lastMessage: msg,
-                    lastMessageTime: serverTimestamp(),
-                    unread: currentUser.uid !== ADMIN_UID
-                }, { merge: true });
-
-                if (!textOverride) input.value = '';
-            }
-        };
-
-        function listenToChat(id) {
-            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
-            // Intentamos con orderBy, si falla el cliente debería ver el chat vacío o podríamos implementar fallback
-            // Para simplicidad en este entorno, usamos la query directa
-            const q = query(msgsRef, orderBy("timestamp", "asc"));
-            
-            onSnapshot(q, (snapshot) => {
-                const area = document.getElementById('chat-messages');
-                area.innerHTML = '';
-                snapshot.forEach(d => {
-                    const m = d.data();
-                    const isMe = m.senderId === currentUser.uid;
-                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
-                        <div class="${isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-gray-100 text-gray-800'} px-3 py-2 rounded-lg text-sm">${m.text}</div>
-                    </div>`;
-                });
-                area.scrollTop = area.scrollHeight;
-            });
-        }
-        
-        window.toggleChat = () => document.getElementById('chat-window').classList.toggle('hidden');
-        window.switchAdminTab = (tab) => {
-            document.getElementById('admin-chat-section').classList.toggle('hidden', tab !== 'chat');
-            document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
-        };
-
-        const adminInput = document.getElementById('admin-chat-input');
-        if(adminInput) {
-            const sendAdmin = async () => {
-                const txt = adminInput.value.trim();
-                if(txt && currentChatId) { 
-                    const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', currentChatId, 'messages');
-                    await addDoc(msgsRef, {
-                        text: txt,
-                        senderId: currentUser.uid,
-                        senderName: "Skai",
-                        timestamp: serverTimestamp()
-                    });
-                    await setDoc(getPublicDoc("chats", currentChatId), {
-                        lastMessage: txt,
-                        lastMessageTime: serverTimestamp(),
-                        unread: false 
-                    }, { merge: true });
-                    adminInput.value = ''; 
-                }
-            };
-            document.getElementById('admin-send-btn').onclick = sendAdmin;
-            adminInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') sendAdmin(); });
-        }
-
-        window.logoutAdmin = async () => { 
-            await signOut(auth); 
-            window.location.href = window.location.pathname; 
-        }
-
-        document.getElementById('chat-input').addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
-
-    </script>
-
     <style>
-        :root {
-            /* TUS COLORES ORIGINALES */
-            --text-main: #5D5D5D; --text-inverse: #FFFFFF; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
-            --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
-            --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
-            --color-accent: #B9FBC0; --color-accent-dark: #98FB98;
-            --hero-gradient-start: var(--color-primary); --hero-gradient-end: var(--color-secondary);
+        @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300;500;700&display=swap');
+        
+        body {
+            font-family: 'Quicksand', sans-serif;
+            background-color: #fff5f7;
         }
-        body.nsfw-mode {
-            --text-main: #E0E0E0; --text-inverse: #000000; --bg-body: #0a0a0a; --bg-card: #141414;
-            --color-primary: #8B0000; --color-primary-dark: #FF0000;
-            --color-secondary: #00008B; --color-secondary-dark: #1E90FF;
-            --color-accent: #C62828; --color-accent-dark: #B71C1C;
-            --hero-gradient-start: #2b0505; --hero-gradient-end: #020a24;
+
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
         }
-        body { background-color: var(--bg-body); color: var(--text-main); font-family: 'Segoe UI', sans-serif; transition: background 0.5s ease, color 0.5s ease; }
-        .hero-gradient { background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%); transition: background 0.5s ease; }
-        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: 0.3s ease; }
-        .card:hover { transform: translateY(-5px); }
-        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s ease; }
-        body.nsfw-mode .btn-primary { color: white; }
-        .btn-primary:hover { background-color: var(--color-accent-dark); transform: scale(1.05); }
-        #age-modal, #order-summary-modal, #admin-login-modal { backdrop-filter: blur(8px); }
-        #mobile-menu { transition: max-height 0.3s ease-in-out; max-height: 0; overflow: hidden; }
-        #mobile-menu.open { max-height: 300px; }
-        .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        /* Scrollbars */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
+
+        .gradient-text {
+            background: linear-gradient(45deg, #ff85a1, #ffb7c5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .card-hover:hover {
+            transform: translateY(-5px);
+            transition: all 0.3s ease;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #fff5f7; }
+        ::-webkit-scrollbar-thumb { background: #ffb7c5; border-radius: 10px; }
     </style>
 </head>
-<body class="antialiased relative">
+<body class="text-gray-800">
 
-    <!-- 1. LOGIN ADMIN MODAL -->
-    <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
-        <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
-            <h2 class="text-2xl font-bold mb-4 text-gray-700">Admin Access</h2>
-            <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3">
-            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4">
-            <button id="login-btn" onclick="loginAdmin()" class="w-full bg-blue-500 text-white py-3 rounded font-bold hover:bg-blue-600">Enter</button>
-            <a href="index.html" class="block mt-4 text-xs text-gray-400 hover:underline">Back to Site</a>
-        </div>
-    </div>
-
-    <!-- 2. AGE VERIFICATION MODAL -->
-    <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
-        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center">
-            <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
-            <h3 class="text-3xl font-bold mb-2">NSFW Content Warning</h3>
-            <p class="mb-6 text-gray-300">Contains adult content. Are you 18+?</p>
-            <div class="flex flex-col gap-3">
-                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold">YES, I am 18+</button>
-                <button onclick="closeModal()" class="bg-transparent border border-gray-600 text-gray-400 py-2 px-6 rounded-xl font-bold">No, take me back</button>
+    <!-- NAVIGATION -->
+    <nav class="fixed w-full z-50 p-4">
+        <div class="max-w-6xl mx-auto flex justify-between items-center glass rounded-full px-6 py-3 shadow-lg">
+            <div class="text-2xl font-bold gradient-text">Skai Chocobunny</div>
+            <div class="hidden md:flex space-x-8 font-medium">
+                <a href="#home" class="hover:text-pink-400 transition">Home</a>
+                <a href="#portfolio" class="hover:text-pink-400 transition">Portfolio</a>
+                <a href="#commissions" class="hover:text-pink-400 transition">Commissions</a>
+                <a href="#contact" class="hover:text-pink-400 transition">Contact</a>
+                <button id="admin-login-btn" class="text-xs text-gray-400 hover:text-pink-500 underline">Admin</button>
             </div>
-        </div>
-    </div>
-
-    <!-- 3. ORDER SUMMARY MODAL -->
-    <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
-        <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
-            <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
-            
-            <h3 class="text-3xl font-bold mb-4 text-center text-[var(--color-secondary-dark)]">Review Order</h3>
-            
-            <div class="bg-gray-50 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100">
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Type:</span><span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span></div>
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Bg:</span><span id="modal-bg">Simple</span></div>
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Extra:</span><span id="modal-extra">No</span></div>
-                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black"><span>Total:</span><span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span></div>
-            </div>
-            <div class="mb-6">
-                <label class="block font-bold text-sm mb-2 text-gray-600">Your Email <span class="text-red-400">*</span></label>
-                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3">
-            </div>
-            <div class="grid grid-cols-2 gap-4">
-                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1"><i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i><span class="text-sm">Google Form</span></button>
-                <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 shadow-lg"><i class="fas fa-comments text-xl"></i><span class="text-sm">Discuss in Chat</span></button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Navigation -->
-    <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
-        <div class="flex justify-between items-center">
-            <div class="text-2xl font-bold flex items-center gap-2">
-                <!-- LOGO DESDE ASSETS -->
-                <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
-                    <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
-                </span>
-                <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
-                <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
-            </div>
-            
-            <button class="md:hidden text-[var(--text-main)]" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
-
-            <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
-                <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
-                <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
-                <a href="#tos" class="hover:text-[var(--color-primary-dark)] transition-colors">TOS</a>
-                <button onclick="openModal()" class="border-2 border-red-400 text-red-400 hover:bg-red-400 hover:text-white px-4 py-1 rounded-full text-sm font-bold transition-all">
-                    <i class="fas fa-exclamation-circle mr-1"></i> NSFW / 18+
-                </button>
-                <a href="#contact" class="btn-primary px-6 py-2 rounded-full font-bold shadow-sm text-sm">Contact Me</a>
-            </div>
-        </div>
-        <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-gray-500 text-center border-t border-gray-100 mt-4">
-            <a href="#portfolio">Portfolio</a><a href="#prices">Prices</a><button onclick="openModal()" class="text-red-400 font-bold">NSFW Mode</button>
+            <button class="md:hidden text-pink-500 text-2xl"><i class="fas fa-bars"></i></button>
         </div>
     </nav>
 
-    <!-- Hero Section -->
-    <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
-        <div class="max-w-4xl mx-auto relative z-10">
-            <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
-                <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
+    <!-- HERO SECTION -->
+    <section id="home" class="min-h-screen flex flex-col items-center justify-center text-center px-4 pt-20">
+        <div class="mb-8 relative">
+            <div class="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden border-8 border-white shadow-2xl mx-auto">
+                <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Skai" alt="Skai Avatar" class="w-full h-full object-cover bg-pink-100">
             </div>
-
-            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md transition-all">Atmospheric & Painterly Furry Art</h1>
-            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
-            <div class="flex flex-wrap justify-center gap-4">
-                <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Sale Prices</a>
-                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center">
-                    <i class="fab fa-trello mr-2"></i> Check Queue
-                </a>
+            <div class="absolute -bottom-4 -right-4 bg-white p-4 rounded-full shadow-lg">
+                <span class="text-4xl">🎨</span>
             </div>
+        </div>
+        <h1 class="text-4xl md:text-6xl font-bold mb-4 gradient-text">Digital Illustrator & Character Designer</h1>
+        <p class="text-lg md:text-xl text-gray-600 max-w-2xl mx-auto mb-8 leading-relaxed">
+            Creating magical worlds, pastel aesthetics, and adorable characters. Bringing your imagination to life one pixel at a time.
+        </p>
+        <div class="flex space-x-4">
+            <a href="#portfolio" class="bg-pink-400 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-pink-500 transition-all hover:scale-105">View Gallery</a>
+            <a href="#commissions" class="bg-white text-pink-400 border-2 border-pink-400 px-8 py-3 rounded-full font-bold shadow-lg hover:bg-pink-50 transition-all">Order Now</a>
         </div>
     </section>
 
-    <!-- Quick Portfolio (Grid Dinámico) -->
-    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
-        <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
-        <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <!-- ITEMS DE FIREBASE Y ESTÁTICOS SE CARGARÁN AQUÍ -->
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img1" src="assets/art1.jpg" alt="Art 1" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img2" src="assets/art2.jpg" alt="Art 2" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-accent)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img3" src="assets/art3.jpg" alt="Art 3" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-        </div>
-    </section>
-
-    <!-- Pricing Section -->
-    <section id="prices" class="bg-[var(--color-primary)]/10 py-20 px-6 transition-colors duration-500">
-        <div class="max-w-6xl mx-auto">
-            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] transition-colors">Commission Rates</h2>
-            <p id="price-subtitle" class="text-center mb-16 opacity-70">
-                <span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE</span>
-                Special launch prices applied! (30% OFF)
-            </p>
+    <!-- PORTFOLIO SECTION (DYNAMIC) -->
+    <section id="portfolio" class="py-20 px-4 bg-white/50">
+        <div class="max-w-6xl mx-auto text-center">
+            <h2 class="text-3xl md:text-5xl font-bold mb-12 gradient-text">Latest Works</h2>
             
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
-                    <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
-                        <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
-                    <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
-                    <div id="price-headshot" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$35</span>
-                        <span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
+            <!-- Gallery Grid -->
+            <div id="gallery-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                <!-- Las imágenes cargadas desde Firebase aparecerán aquí -->
+                <div class="col-span-full flex flex-col items-center justify-center py-20 text-gray-400">
+                    <i class="fas fa-spinner fa-spin text-4xl mb-4"></i>
+                    <p>Loading magical art...</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- COMMISSIONS (Simplified Example) -->
+    <section id="commissions" class="py-20 px-4 bg-pink-100/30">
+        <div class="max-w-4xl mx-auto text-center">
+            <h2 class="text-3xl font-bold mb-12 gradient-text">Commission Info</h2>
+            <div class="grid md:grid-cols-2 gap-8">
+                <div class="bg-white p-8 rounded-3xl shadow-xl card-hover">
+                    <h3 class="text-xl font-bold mb-4 text-pink-400">Portrait</h3>
+                    <p class="text-4xl font-bold mb-4">$45</p>
+                    <ul class="text-gray-600 space-y-2 mb-6 text-left">
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> High resolution</li>
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> Simple background</li>
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> Full color</li>
                     </ul>
                 </div>
-
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
-                    <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
-                    <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
-                         <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
-                    <h3 class="text-2xl font-bold mb-4">Half Body</h3>
-                    <div id="price-halfbody" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$60</span>
-                        <span class="text-4xl font-black text-[var(--color-secondary)]">$45</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
-                    </ul>
-                </div>
-
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
-                    <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
-                        <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
-                    </div>
-                    <h3 class="text-2xl font-bold mb-4">Full Body</h3>
-                    <div id="price-fullbody" class="mb-6 transition-all">
-                        <span class="text-gray-400 line-through text-xl block">$90</span>
-                        <span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span>
-                    </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
+                <div class="bg-white p-8 rounded-3xl shadow-xl card-hover">
+                    <h3 class="text-xl font-bold mb-4 text-pink-400">Full Body</h3>
+                    <p class="text-4xl font-bold mb-4">$85</p>
+                    <ul class="text-gray-600 space-y-2 mb-6 text-left">
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> High resolution</li>
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> Detailed design</li>
+                        <li><i class="fas fa-check text-green-400 mr-2"></i> 2 Revision phases</li>
                     </ul>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Calculator -->
-    <section class="py-20 px-6 max-w-3xl mx-auto">
-        <div class="card p-10 rounded-3xl shadow-lg border border-[var(--color-secondary)]/30">
-            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Your Project</h3>
-            <div class="space-y-6">
-                <div>
-                    <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
-                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
-                        <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
-                        <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
-                        <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block font-bold mb-2 opacity-80">Background Complexity</label>
-                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <option value="10">Simple (gradient colors) ($10)</option>
-                        <option value="40">Complex (environment, settings, etc) ($40)</option>
-                        <option value="50">Full Cinematic ($50)</option>
-                    </select>
-                </div>
-                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl">
-                    <input type="checkbox" id="extra" class="w-6 h-6 accent-[var(--color-primary)]" onchange="calculate()">
-                    <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
-                </div>
-                
-                <div class="pt-8 border-t border-dashed border-gray-400/30">
-                    <div class="flex justify-between items-center text-3xl font-black mb-8">
-                        <span class="opacity-80">Total Estimate:</span>
-                        <span id="total" class="text-[var(--color-accent-dark)]">$55</span>
-                    </div>
-                    
-                    <div class="flex flex-col md:flex-row gap-4 justify-center">
-                         <button onclick="openOrderModal()" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
-                            <i class="fas fa-clipboard-check"></i> Fill Order Form
-                        </button>
-                        <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
-                            <i class="fab fa-trello"></i> Check Queue
-                        </a>
-                    </div>
-                    
-                    <p class="text-center mt-6 text-sm opacity-70">
-                        Is this process too formal for you? Don't worry! <br>
-                        <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
-                    </p>
-                </div>
+    <!-- ADMIN PANEL OVERLAY -->
+    <div id="admin-panel" class="fixed inset-0 bg-black/80 z-[60] hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-2xl p-8 shadow-2xl relative overflow-y-auto max-h-[90vh]">
+            <button onclick="document.getElementById('admin-panel').classList.add('hidden')" class="absolute top-4 right-4 text-2xl text-gray-400">&times;</button>
+            <h2 class="text-2xl font-bold mb-6 gradient-text">Admin Dashboard</h2>
+            
+            <div id="login-form">
+                <p class="mb-4 text-gray-600">Please enter your credentials to manage the portfolio.</p>
+                <input type="email" id="admin-email" placeholder="Email" class="w-full p-3 border rounded-xl mb-4 outline-none focus:ring-2 ring-pink-300">
+                <input type="password" id="admin-pass" placeholder="Password" class="w-full p-3 border rounded-xl mb-6 outline-none focus:ring-2 ring-pink-300">
+                <button id="do-login" class="w-full bg-pink-400 text-white py-3 rounded-xl font-bold hover:bg-pink-500">Login</button>
             </div>
-        </div>
-    </section>
 
-    <!-- ADMIN PANEL -->
-    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
-        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
-            <h3 class="font-bold text-lg text-gray-700">Admin Control</h3>
-            <button onclick="switchAdminTab('chat')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-blue-50 font-bold">💬 Messages</button>
-            <button onclick="switchAdminTab('portfolio')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-pink-50 font-bold">🖼️ Upload Art</button>
-            <div class="mt-auto">
-                <button onclick="logoutAdmin()" class="text-red-500 text-sm font-bold w-full text-center border p-2 rounded hover:bg-red-50">Logout</button>
+            <div id="admin-content" class="hidden">
+                <div class="mb-8 p-4 bg-pink-50 rounded-2xl border border-pink-100">
+                    <h3 class="font-bold mb-4">Add New Work</h3>
+                    <input type="file" id="image-upload" accept="image/*" class="block w-full text-sm text-gray-500 mb-4 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-pink-50 file:text-pink-700 hover:file:bg-pink-100">
+                    <input type="text" id="image-title" placeholder="Art Title" class="w-full p-3 border rounded-xl mb-4">
+                    <button id="upload-btn" class="w-full bg-pink-400 text-white py-3 rounded-xl font-bold flex items-center justify-center space-x-2">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <span>Upload to Portfolio</span>
+                    </button>
+                    <div id="upload-status" class="mt-2 text-sm text-center font-medium"></div>
+                </div>
+
+                <h3 class="font-bold mb-4">Manage Current Art</h3>
+                <div id="manage-grid" class="grid grid-cols-2 gap-4">
+                    <!-- Art pieces with delete buttons -->
+                </div>
             </div>
         </div>
-        
-        <div class="flex-1 p-0 flex relative">
-            <!-- CHAT TAB -->
-            <div id="admin-chat-section" class="flex-1 flex flex-col">
-                <!-- Chat List Sidebar -->
-                <div class="flex h-full">
-                    <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
-                    <!-- Chat Area -->
-                    <div class="flex-1 flex flex-col">
-                        <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
-                        <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
-                        <div class="p-4 border-t bg-white flex gap-2">
-                            <input type="text" id="admin-chat-input" placeholder="Reply..." class="flex-1 border rounded-lg px-4 py-3">
-                            <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold">Send</button>
+    </div>
+
+    <!-- FIREBASE & LOGIC -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+        const firebaseConfig = JSON.parse(window.__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const storage = getStorage(app);
+        const appId = window.__app_id || 'skai-portfolio';
+
+        // 1. ESCUCHAR CAMBIOS EN LA COLECCIÓN DE ARTE (Real-time Gallery)
+        const artCollection = collection(db, 'artifacts', appId, 'public', 'data', 'artwork');
+        const artQuery = query(artCollection, orderBy('createdAt', 'desc'));
+
+        onSnapshot(artQuery, (snapshot) => {
+            const gallery = document.getElementById('gallery-grid');
+            const manageGrid = document.getElementById('manage-grid');
+            
+            if (snapshot.empty) {
+                gallery.innerHTML = '<div class="col-span-full py-20 text-gray-400"><p>No work uploaded yet. Check back soon!</p></div>';
+                manageGrid.innerHTML = '<p class="text-sm text-gray-400">No images found.</p>';
+                return;
+            }
+
+            gallery.innerHTML = '';
+            manageGrid.innerHTML = '';
+
+            snapshot.forEach((docSnap) => {
+                const art = docSnap.data();
+                const id = docSnap.id;
+
+                // Agregar a la galería pública
+                gallery.innerHTML += `
+                    <div class="group relative overflow-hidden rounded-3xl bg-pink-100 card-hover shadow-lg aspect-square">
+                        <img src="${art.url}" alt="${art.title}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110">
+                        <div class="absolute inset-0 bg-gradient-to-t from-pink-500/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6 text-white text-left">
+                            <h3 class="text-xl font-bold">${art.title || 'Untitled'}</h3>
+                            <p class="text-sm opacity-80">Digital Illustration</p>
                         </div>
                     </div>
-                </div>
-            </div>
+                `;
 
-            <!-- PORTFOLIO TAB -->
-            <div id="admin-portfolio-section" class="hidden flex-1 p-10 bg-gray-50 h-full overflow-y-auto">
-                <h2 class="text-3xl font-bold mb-6 text-gray-800">Gallery Manager</h2>
-                
-                <div class="max-w-xl bg-white border p-8 rounded-2xl shadow-lg mb-8">
-                    <div class="mb-4">
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Artwork Title</label>
-                        <input type="text" id="art-title" class="w-full border-2 border-gray-200 p-3 rounded-lg outline-none" placeholder="e.g. Cyber Bunny">
+                // Agregar al panel de gestión (borrar)
+                manageGrid.innerHTML += `
+                    <div class="relative rounded-lg overflow-hidden border border-gray-200 aspect-square group">
+                        <img src="${art.url}" class="w-full h-full object-cover">
+                        <button onclick="deleteArt('${id}', '${art.storagePath}')" class="absolute inset-0 bg-red-500/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
+                            <i class="fas fa-trash-alt text-2xl"></i>
+                        </button>
                     </div>
-                    
-                    <div class="mb-4 flex items-center gap-3">
-                        <label class="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="art-nsfw" class="sr-only peer">
-                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
-                            <span class="ml-3 text-sm font-bold text-gray-700">Is this content NSFW? 🔞</span>
-                        </label>
-                    </div>
+                `;
+            });
+        }, (error) => console.error("Error fetching gallery:", error));
 
-                    <div class="mb-6">
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Image File (PNG/JPG)</label>
-                        <input type="file" id="art-file" accept="image/*" class="w-full border-2 border-gray-200 p-3 rounded-lg">
-                    </div>
-                    <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-4 rounded-xl font-bold hover:bg-green-600 transition shadow-lg">Upload to Portfolio</button>
-                    <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
-                </div>
-
-                <h3 class="text-xl font-bold text-gray-700 mb-4">Manage Uploaded Art</h3>
-                <div id="admin-portfolio-list" class="space-y-3"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- CLIENT CHAT BUTTON & WINDOW -->
-    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 cursor-pointer animate-bounce chat-anim">
-        <div class="bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white"><i class="fas fa-comment-dots text-2xl"></i></div>
-    </div>
-    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
-        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
-            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
-        </div>
-        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
-        <div class="p-3 border-t bg-white flex gap-2">
-            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
-            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
-        </div>
-    </div>
-
-    <script>
-        // LOGICA DE SCRIPT: Formulario, Toggle SFW/NSFW y Calculadora
-        let isNSFW = false;
-
-        function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
-        function openModal() { isNSFW ? toggleMode(false) : document.getElementById('age-modal').classList.remove('hidden'); }
-        function closeModal() { document.getElementById('age-modal').classList.add('hidden'); }
-        function confirmNSFW() { closeModal(); toggleMode(true); }
-
-        function toggleMode(nsfw) {
-            isNSFW = nsfw;
-            const body = document.body;
-            const favicon = document.getElementById('dynamic-favicon');
-            const faviconImg = document.getElementById('dynamic-favicon-img');
+        // 2. LÓGICA DE SUBIDA
+        document.getElementById('upload-btn').addEventListener('click', async () => {
+            const fileInput = document.getElementById('image-upload');
+            const titleInput = document.getElementById('image-title');
+            const status = document.getElementById('upload-status');
             
-            // Re-renderizamos el portafolio con el nuevo filtro
-            if (typeof window.renderPortfolio === 'function') {
-                window.renderPortfolio();
+            if (!fileInput.files[0]) {
+                status.innerText = "❌ Please select a file first.";
+                status.className = "mt-2 text-sm text-red-500";
+                return;
             }
 
-            if (nsfw) {
-                body.classList.add('nsfw-mode');
-                favicon.href = "assets/logo_white.svg"; 
-                if(faviconImg) faviconImg.src = "assets/logo_white.svg";
+            const file = fileInput.files[0];
+            const title = titleInput.value || "Untitled";
+            const storagePath = `portfolio/${Date.now()}_${file.name}`;
+            const storageRef = ref(storage, storagePath);
 
-                document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
-                document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
-                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> NSFW Launch Promo applied!';
-                
-                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-500 line-through text-xl block">$50<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$35<\/span>';
-                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
-                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
+            try {
+                status.innerText = "⏳ Uploading magical dust...";
+                status.className = "mt-2 text-sm text-blue-500";
 
-                document.getElementById('img1').src = "assets/art1-nsfw.jpg";
-                document.getElementById('img2').src = "assets/art2-nsfw.jpg";
-                document.getElementById('img3').src = "assets/art3-nsfw.jpg";
-                
-                // RUTAS NSFW ACTUALIZADAS CON TUS NOMBRES EXACTOS
-                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
-                document.getElementById('ex-halfbody').src = "assets/Halfbody.png";
-                document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
-                
-                document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
-                document.getElementById('opt-head').value = 35;
-                document.getElementById('opt-half').innerText = "NSFW Half Body ($55) [PROMO]";
-                document.getElementById('opt-half').value = 55;
-                document.getElementById('opt-full').innerText = "NSFW Full Body ($85) [PROMO]";
-                document.getElementById('opt-full').value = 85;
+                const uploadResult = await uploadBytes(storageRef, file);
+                const downloadURL = await getDownloadURL(uploadResult.ref);
 
+                await addDoc(artCollection, {
+                    title: title,
+                    url: downloadURL,
+                    storagePath: storagePath,
+                    createdAt: serverTimestamp()
+                });
+
+                status.innerText = "✨ Successfully added to gallery!";
+                status.className = "mt-2 text-sm text-green-500";
+                fileInput.value = '';
+                titleInput.value = '';
+            } catch (error) {
+                console.error(error);
+                status.innerText = "❌ Error uploading: " + error.message;
+                status.className = "mt-2 text-sm text-red-500";
+            }
+        });
+
+        // 3. LÓGICA DE BORRADO
+        window.deleteArt = async (id, storagePath) => {
+            if (!confirm("Are you sure you want to delete this piece?")) return;
+            try {
+                // Borrar de Firestore
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'artwork', id));
+                // Borrar de Storage
+                const storageRef = ref(storage, storagePath);
+                await deleteObject(storageRef);
+            } catch (error) {
+                console.error("Delete failed:", error);
+            }
+        };
+
+        // 4. LÓGICA DE AUTH
+        const adminBtn = document.getElementById('admin-login-btn');
+        const adminPanel = document.getElementById('admin-panel');
+        const loginForm = document.getElementById('login-form');
+        const adminContent = document.getElementById('admin-content');
+
+        adminBtn.addEventListener('click', () => adminPanel.classList.remove('hidden'));
+
+        document.getElementById('do-login').addEventListener('click', async () => {
+            const email = document.getElementById('admin-email').value;
+            const pass = document.getElementById('admin-pass').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+            } catch (e) {
+                alert("Login failed: " + e.message);
+            }
+        });
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                loginForm.classList.add('hidden');
+                adminContent.classList.remove('hidden');
             } else {
-                body.classList.remove('nsfw-mode');
-                favicon.href = "assets/logo_sin_fondo.svg";
-                if(faviconImg) faviconImg.src = "assets/logo_sin_fondo.svg";
-
-                document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
-                document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
-                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> Special launch prices applied! (30% OFF)';
-
-                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-400 line-through text-xl block">$35<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25<\/span>';
-                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$60<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$45<\/span>';
-                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$90<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65<\/span>';
-
-                document.getElementById('img1').src = "assets/art1.jpg";
-                document.getElementById('img2').src = "assets/art2.jpg";
-                document.getElementById('img3').src = "assets/art3.jpg";
-                
-                // RUTAS SFW (Mantenemos las que tenías por defecto)
-                document.getElementById('ex-headshot').src = "assets/headshot.jpg";
-                document.getElementById('ex-halfbody').src = "assets/halfbody.jpg";
-                document.getElementById('ex-fullbody').src = "assets/fullbody.jpg";
-
-                document.getElementById('opt-head').innerText = "Headshot ($25) [PROMO]";
-                document.getElementById('opt-head').value = 25;
-                document.getElementById('opt-half').innerText = "Half Body ($45) [PROMO]";
-                document.getElementById('opt-half').value = 45;
-                document.getElementById('opt-full').innerText = "Full Body ($65) [PROMO]";
-                document.getElementById('opt-full').value = 65;
+                loginForm.classList.remove('hidden');
+                adminContent.classList.add('hidden');
             }
-            calculate();
-        }
-
-        function calculate() {
-            const base = parseFloat(document.getElementById('type').value);
-            const bg = parseFloat(document.getElementById('bg').value);
-            const extraChar = document.getElementById('extra').checked;
-            let total = base + bg;
-            if (extraChar) total += (base * 0.5);
-            document.getElementById('total').innerText = '$' + total.toFixed(0);
-        }
-
-        function goToForm(e) {
-            e.preventDefault();
-            const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
-            const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
-            const config = isNSFW ? NSFW_CONFIG : SFW_CONFIG;
-            const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
-
-            const typeVal = document.getElementById('type').value;
-            const bgVal = document.getElementById('bg').value;
-            const extraChar = document.getElementById('extra').checked;
-
-            let typeText = "", bgText = "";
-            let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
-
-            if (!isNSFW) {
-                if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
-                if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
-                if(typeVal == "65") typeText = "Full Body ($65) [PROMO]";
-                if(bgVal == "10") bgText = "Simple (gradient colors)";
-                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
-                if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; 
-            } else {
-                if(typeVal == "35") typeText = "NSFW Headshot ($35) [PROMO]";
-                if(typeVal == "55") typeText = "NSFW Half Body ($55) [PROMO]";
-                if(typeVal == "85") typeText = "NSFW Full Body ($85) [PROMO]";
-                if(bgVal == "10") bgText = "Simple (gradient colors)";
-                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
-                if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
-            }
-
-            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
-            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
-        }
-
-        // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
-        window.openOrderModal = function() {
-            const typeSelect = document.getElementById('type');
-            const bgSelect = document.getElementById('bg');
-            const extraCheck = document.getElementById('extra');
-            const totalText = document.getElementById('total').innerText;
-            document.getElementById('modal-type').innerText = typeSelect.options[typeSelect.selectedIndex].text;
-            document.getElementById('modal-bg').innerText = bgSelect.options[bgSelect.selectedIndex].text;
-            document.getElementById('modal-extra').innerText = extraCheck.checked ? "Yes" : "No";
-            document.getElementById('modal-total').innerText = totalText;
-            document.getElementById('order-summary-modal').classList.remove('hidden');
-        }
-        window.closeOrderModal = function() { document.getElementById('order-summary-modal').classList.add('hidden'); }
-        
-        window.proceedToForm = goToForm; 
-
-        window.proceedToChat = function() {
-            const email = document.getElementById('order-email').value;
-            if (!email) { alert("Please enter your email so I can notify you about your order status."); return; }
-            const typeText = document.getElementById('modal-type').innerText;
-            const bgText = document.getElementById('modal-bg').innerText;
-            const extraText = document.getElementById('modal-extra').innerText;
-            const totalText = document.getElementById('modal-total').innerText;
-            const initialMessage = `Hi Skai! I'd like to discuss a commission request:\n- Type: ${typeText}\n- Background: ${bgText}\n- Extra Char: ${extraText}\n- Estimate: ${totalText}\n\nMy contact email is: ${email}`;
-            window.clientEmailForNotify = email;
-            closeOrderModal();
-            document.getElementById('chat-window').classList.remove('hidden');
-            window.sendMessage(initialMessage);
-        }
+        });
     </script>
 </body>
 </html>
