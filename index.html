@@ -6,297 +6,454 @@
     <title>Skai Chocobunny | Digital Artist</title>
     
     <!-- FAVICON -->
-    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐰</text></svg>">
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
 
     <!-- ESTILOS Y FUENTES -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300;500;700&display=swap');
+    <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
+        const firebaseConfigRaw = {
+            apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
+            authDomain: "skai-chat-4eeab.firebaseapp.com",
+            projectId: "skai-chat-4eeab",
+            storageBucket: "skai-chat-4eeab.firebasestorage.app",
+            messagingSenderId: "881808601018",
+            appId: "1:881808601018:web:a0c47a21765bb3fdda7783",
+            measurementId: "G-7Z3XTYL288"
+        };
         
-        body {
-            font-family: 'Quicksand', sans-serif;
-            background-color: #fff5f7;
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfigRaw;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'skai-default';
+
+        const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
+        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let currentUser = null;
+        let currentChatId = null;
+        let unsubscribePortfolio = null;
+
+        // --- AUTH INIT ---
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) { console.error("Auth Error:", error); }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+            if (user) {
+                setupPortfolioListener();
+                if (user.uid === ADMIN_UID) {
+                    if (wantsAdmin) {
+                        document.getElementById('admin-login-modal').classList.add('hidden');
+                        initAdminPanel();
+                    }
+                } else {
+                    if (wantsAdmin) {
+                        document.getElementById('admin-login-modal').classList.remove('hidden');
+                    } else {
+                        const savedChatId = localStorage.getItem('skai_chat_id');
+                        if (savedChatId) {
+                            currentChatId = savedChatId;
+                            listenToChat(currentChatId);
+                        }
+                    }
+                }
+            }
+        });
+
+        initAuth();
+
+        const getPublicCollection = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+        const getPublicDoc = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+
+        // --- GALERÍA DINÁMICA (CORRECCIÓN AQUÍ) ---
+        function setupPortfolioListener() {
+            if (!currentUser) return;
+            if (unsubscribePortfolio) unsubscribePortfolio();
+
+            const q = query(getPublicCollection("portfolio"));
+            
+            unsubscribePortfolio = onSnapshot(q, (snapshot) => {
+                const items = [];
+                snapshot.forEach((doc) => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+                // Ordenar por fecha de creación (los más nuevos primero)
+                items.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                window.portfolioData = items;
+                renderPortfolio(); // Llamamos a renderizar cada vez que hay cambios
+                if (currentUser && currentUser.uid === ADMIN_UID) renderAdminPortfolioList(items);
+            });
         }
 
-        .glass {
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.3);
+        window.renderPortfolio = () => {
+            const grid = document.getElementById('portfolio-grid');
+            // Mantenemos solo los items estáticos si no hay dinámicos, o limpiamos los dinámicos previos
+            const existingDynamic = document.querySelectorAll('.dynamic-item');
+            existingDynamic.forEach(e => e.remove());
+
+            const data = window.portfolioData || [];
+
+            data.forEach((item) => {
+                // Filtro NSFW
+                if (!isNSFW && item.nsfw) return; 
+
+                const div = document.createElement('div');
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item animate-fade-in";
+                
+                div.innerHTML = `
+                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
+                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
+                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
+                    </div>
+                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110">
+                `;
+                // Insertar al principio del grid
+                grid.insertBefore(div, grid.firstChild);
+            });
         }
 
-        .gradient-text {
-            background: linear-gradient(45deg, #ff85a1, #ffb7c5);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        // --- RESTO DE FUNCIONES (ADMIN, COMPRESIÓN, CHAT) ---
+        window.loginAdmin = async () => {
+            const email = document.getElementById('admin-email').value;
+            const pass = document.getElementById('admin-pass').value;
+            try { await signInWithEmailAndPassword(auth, email, pass); } catch (e) { alert("Error: " + e.message); }
+        };
+
+        function compressImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const MAX = 1000;
+                        let w = img.width, h = img.height;
+                        if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
+                        else { if (h > MAX) { w *= MAX / h; h = MAX; } }
+                        canvas.width = w; canvas.height = h;
+                        ctx.drawImage(img, 0, 0, w, h);
+                        resolve(canvas.toDataURL('image/jpeg', 0.8));
+                    };
+                };
+            });
         }
 
-        .card-hover:hover {
-            transform: translateY(-5px);
-            transition: all 0.3s ease;
+        window.uploadArt = async () => {
+            const file = document.getElementById('art-file').files[0];
+            const title = document.getElementById('art-title').value;
+            const isNsfw = document.getElementById('art-nsfw').checked;
+            const status = document.getElementById('upload-status');
+            if (!file) return;
+            status.innerText = "Procesando...";
+            try {
+                const base64 = await compressImage(file);
+                await addDoc(getPublicCollection("portfolio"), {
+                    title: title || "Sin título",
+                    imageUrl: base64,
+                    nsfw: isNsfw,
+                    createdAt: serverTimestamp()
+                });
+                status.innerText = "¡Arte subido con éxito!";
+                document.getElementById('art-file').value = "";
+                document.getElementById('art-title').value = "";
+            } catch (e) { status.innerText = "Error: " + e.message; }
+        };
+
+        window.deleteArt = async (docId) => {
+            if(!confirm("¿Borrar permanentemente?")) return;
+            await deleteDoc(getPublicDoc("portfolio", docId));
+        };
+
+        function renderAdminPortfolioList(items) {
+            const list = document.getElementById('admin-portfolio-list');
+            if(!list) return;
+            list.innerHTML = '';
+            items.forEach(item => {
+                const div = document.createElement('div');
+                div.className = "flex items-center justify-between bg-white p-3 rounded-lg border mb-2";
+                div.innerHTML = `<div class="flex items-center gap-3"><img src="${item.imageUrl}" class="w-10 h-10 object-cover rounded"><span>${item.title}</span></div>
+                                 <button onclick="deleteArt('${item.id}')" class="text-red-500"><i class="fas fa-trash"></i></button>`;
+                list.appendChild(div);
+            });
         }
 
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #fff5f7; }
-        ::-webkit-scrollbar-thumb { background: #ffb7c5; border-radius: 10px; }
+        // --- SISTEMA DE CHAT ---
+        function listenToChat(id) {
+            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
+            const q = query(msgsRef, orderBy("timestamp", "asc"));
+            onSnapshot(q, (snap) => {
+                const area = document.getElementById('chat-messages');
+                area.innerHTML = '';
+                snap.forEach(d => {
+                    const m = d.data();
+                    const isMe = m.senderId === currentUser?.uid;
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-blue-400 text-white' : 'bg-gray-100'} px-3 py-2 rounded-lg text-sm">${m.text}</div>
+                    </div>`;
+                });
+                area.scrollTop = area.scrollHeight;
+            });
+        }
+
+        window.sendMessage = async (textOverride = null) => {
+            const input = document.getElementById('chat-input');
+            const msg = textOverride || input.value.trim();
+            if (!msg) return;
+
+            if (!currentChatId) {
+                const chatRef = await addDoc(getPublicCollection("chats"), {
+                    clientName: "Cliente " + currentUser.uid.slice(0,4),
+                    lastMessage: msg,
+                    lastMessageTime: serverTimestamp(),
+                    unread: true
+                });
+                currentChatId = chatRef.id;
+                localStorage.setItem('skai_chat_id', currentChatId);
+                listenToChat(currentChatId);
+            }
+            
+            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', currentChatId, 'messages');
+            await addDoc(msgsRef, { text: msg, senderId: currentUser.uid, timestamp: serverTimestamp() });
+            await setDoc(getPublicDoc("chats", currentChatId), { lastMessage: msg, lastMessageTime: serverTimestamp(), unread: currentUser.uid !== ADMIN_UID }, { merge: true });
+            if (!textOverride) input.value = '';
+        };
+
+        function initAdminPanel() {
+            document.getElementById('admin-chat-panel').classList.remove('hidden');
+            const q = query(getPublicCollection("chats"));
+            onSnapshot(q, (snap) => {
+                const list = document.getElementById('admin-chat-list');
+                list.innerHTML = '';
+                snap.forEach(d => {
+                    const chat = d.data();
+                    const div = document.createElement('div');
+                    div.className = "p-3 border-b cursor-pointer hover:bg-gray-100";
+                    div.innerHTML = `<p class="font-bold text-sm">${chat.clientName}</p><p class="text-xs text-gray-400 truncate">${chat.lastMessage}</p>`;
+                    div.onclick = () => loadAdminChat(d.id, chat.clientName);
+                    list.appendChild(div);
+                });
+            });
+        }
+
+        window.loadAdminChat = (id, name) => {
+            currentChatId = id;
+            document.getElementById('chat-admin-title').innerText = "Chat con " + name;
+            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
+            const q = query(msgsRef, orderBy("timestamp", "asc"));
+            onSnapshot(q, (snap) => {
+                const area = document.getElementById('admin-messages-area');
+                area.innerHTML = '';
+                snap.forEach(d => {
+                    const m = d.data();
+                    const isMe = m.senderId === ADMIN_UID;
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border'} px-3 py-2 rounded-lg text-sm">${m.text}</div>
+                    </div>`;
+                });
+                area.scrollTop = area.scrollHeight;
+            });
+        };
+        
+        window.toggleChat = () => document.getElementById('chat-window').classList.toggle('hidden');
+        window.switchAdminTab = (tab) => {
+            document.getElementById('admin-chat-section').classList.toggle('hidden', tab !== 'chat');
+            document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
+        };
+    </script>
+
+    <style>
+        :root {
+            --text-main: #5D5D5D; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
+            --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
+            --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
+            --color-accent: #B9FBC0; --color-accent-dark: #98FB98;
+        }
+        body.nsfw-mode {
+            --bg-body: #0a0a0a; --bg-card: #141414; --text-main: #E0E0E0;
+            --color-primary: #8B0000; --color-secondary: #00008B;
+        }
+        body { background-color: var(--bg-body); color: var(--text-main); font-family: 'Segoe UI', sans-serif; transition: 0.5s; }
+        .hero-gradient { background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%); }
+        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s; }
+        .btn-primary:hover { background-color: var(--color-accent-dark); transform: scale(1.05); }
+        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
     </style>
 </head>
-<body class="text-gray-800">
+<body class="antialiased">
 
-    <!-- NAVIGATION -->
-    <nav class="fixed w-full z-50 p-4">
-        <div class="max-w-6xl mx-auto flex justify-between items-center glass rounded-full px-6 py-3 shadow-lg">
-            <div class="text-2xl font-bold gradient-text">Skai Chocobunny</div>
-            <div class="hidden md:flex space-x-8 font-medium">
-                <a href="#home" class="hover:text-pink-400 transition">Home</a>
-                <a href="#portfolio" class="hover:text-pink-400 transition">Portfolio</a>
-                <a href="#commissions" class="hover:text-pink-400 transition">Commissions</a>
-                <a href="#contact" class="hover:text-pink-400 transition">Contact</a>
-                <button id="admin-login-btn" class="text-xs text-gray-400 hover:text-pink-500 underline">Admin</button>
-            </div>
-            <button class="md:hidden text-pink-500 text-2xl"><i class="fas fa-bars"></i></button>
+    <!-- LOGIN MODAL -->
+    <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
+        <div class="bg-white p-8 rounded-2xl max-w-sm w-full text-center">
+            <h2 class="text-2xl font-bold mb-4">Acceso Admin</h2>
+            <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3">
+            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4">
+            <button onclick="loginAdmin()" class="w-full bg-blue-500 text-white py-3 rounded font-bold">Entrar</button>
+        </div>
+    </div>
+
+    <!-- AGE MODAL -->
+    <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
+        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl text-center max-w-md">
+            <h3 class="text-3xl font-bold mb-2">Advertencia NSFW</h3>
+            <p class="mb-6">Este modo contiene arte para adultos. ¿Eres mayor de 18 años?</p>
+            <button onclick="confirmNSFW()" class="bg-red-600 w-full py-3 rounded-xl font-bold mb-3">Sí, soy mayor de 18</button>
+            <button onclick="closeModal()" class="text-gray-400">No, volver</button>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md sticky top-0 z-50 flex justify-between items-center shadow-sm">
+        <div class="text-2xl font-bold">
+            <span class="text-[var(--color-primary-dark)]">SKAI</span> CHOCOBUNNY
+        </div>
+        <div class="flex items-center space-x-6 font-semibold">
+            <a href="#portfolio">Portafolio</a>
+            <a href="#prices">Precios</a>
+            <button onclick="openAgeModal()" class="text-red-400 border border-red-400 px-4 py-1 rounded-full text-xs">NSFW</button>
+            <a href="#contact" class="btn-primary px-6 py-2 rounded-full text-sm">Contacto</a>
         </div>
     </nav>
 
-    <!-- HERO SECTION -->
-    <section id="home" class="min-h-screen flex flex-col items-center justify-center text-center px-4 pt-20">
-        <div class="mb-8 relative">
-            <div class="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden border-8 border-white shadow-2xl mx-auto">
-                <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Skai" alt="Skai Avatar" class="w-full h-full object-cover bg-pink-100">
-            </div>
-            <div class="absolute -bottom-4 -right-4 bg-white p-4 rounded-full shadow-lg">
-                <span class="text-4xl">🎨</span>
-            </div>
-        </div>
-        <h1 class="text-4xl md:text-6xl font-bold mb-4 gradient-text">Digital Illustrator & Character Designer</h1>
-        <p class="text-lg md:text-xl text-gray-600 max-w-2xl mx-auto mb-8 leading-relaxed">
-            Creating magical worlds, pastel aesthetics, and adorable characters. Bringing your imagination to life one pixel at a time.
-        </p>
-        <div class="flex space-x-4">
-            <a href="#portfolio" class="bg-pink-400 text-white px-8 py-3 rounded-full font-bold shadow-lg hover:bg-pink-500 transition-all hover:scale-105">View Gallery</a>
-            <a href="#commissions" class="bg-white text-pink-400 border-2 border-pink-400 px-8 py-3 rounded-full font-bold shadow-lg hover:bg-pink-50 transition-all">Order Now</a>
-        </div>
+    <!-- Hero -->
+    <section class="hero-gradient py-24 px-6 text-center text-white">
+        <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6">Arte Furry Atmosférico</h1>
+        <p id="hero-subtitle" class="text-xl mb-8">Dando vida a tus personajes con iluminación profesional.</p>
+        <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">Ver Precios</a>
     </section>
 
-    <!-- PORTFOLIO SECTION (DYNAMIC) -->
-    <section id="portfolio" class="py-20 px-4 bg-white/50">
-        <div class="max-w-6xl mx-auto text-center">
-            <h2 class="text-3xl md:text-5xl font-bold mb-12 gradient-text">Latest Works</h2>
-            
-            <!-- Gallery Grid -->
-            <div id="gallery-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                <!-- Las imágenes cargadas desde Firebase aparecerán aquí -->
-                <div class="col-span-full flex flex-col items-center justify-center py-20 text-gray-400">
-                    <i class="fas fa-spinner fa-spin text-4xl mb-4"></i>
-                    <p>Loading magical art...</p>
-                </div>
+    <!-- Portfolio Dinámico -->
+    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
+        <h2 class="text-4xl font-bold text-center mb-12">Latest Works</h2>
+        <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <!-- Los items dinámicos de Firebase se insertan aquí -->
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center">
+                <img src="assets/art1.jpg" class="w-full h-full object-cover">
+            </div>
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center">
+                <img src="assets/art2.jpg" class="w-full h-full object-cover">
+            </div>
+            <div class="rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center">
+                <img src="assets/art3.jpg" class="w-full h-full object-cover">
             </div>
         </div>
     </section>
 
-    <!-- COMMISSIONS (Simplified Example) -->
-    <section id="commissions" class="py-20 px-4 bg-pink-100/30">
-        <div class="max-w-4xl mx-auto text-center">
-            <h2 class="text-3xl font-bold mb-12 gradient-text">Commission Info</h2>
-            <div class="grid md:grid-cols-2 gap-8">
-                <div class="bg-white p-8 rounded-3xl shadow-xl card-hover">
-                    <h3 class="text-xl font-bold mb-4 text-pink-400">Portrait</h3>
-                    <p class="text-4xl font-bold mb-4">$45</p>
-                    <ul class="text-gray-600 space-y-2 mb-6 text-left">
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> High resolution</li>
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> Simple background</li>
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> Full color</li>
-                    </ul>
-                </div>
-                <div class="bg-white p-8 rounded-3xl shadow-xl card-hover">
-                    <h3 class="text-xl font-bold mb-4 text-pink-400">Full Body</h3>
-                    <p class="text-4xl font-bold mb-4">$85</p>
-                    <ul class="text-gray-600 space-y-2 mb-6 text-left">
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> High resolution</li>
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> Detailed design</li>
-                        <li><i class="fas fa-check text-green-400 mr-2"></i> 2 Revision phases</li>
-                    </ul>
-                </div>
+    <!-- Precios -->
+    <section id="prices" class="bg-pink-50/50 py-20 px-6">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div class="card p-6 rounded-3xl text-center">
+                <img src="assets/headshot.jpg" class="w-full aspect-square rounded-xl mb-4 object-cover">
+                <h3 class="text-xl font-bold">Headshot</h3>
+                <p class="text-3xl font-black text-pink-500 mb-4">$25</p>
+                <ul class="text-sm space-y-2 opacity-70">
+                    <li>Ilustración de hombros hacia arriba</li>
+                    <li>Fondo simple</li>
+                </ul>
+            </div>
+            <div class="card p-6 rounded-3xl text-center scale-105 shadow-xl border-pink-200">
+                <img src="assets/halfbody.jpg" class="w-full aspect-[3/4] rounded-xl mb-4 object-cover">
+                <h3 class="text-xl font-bold">Half Body</h3>
+                <p class="text-3xl font-black text-blue-500 mb-4">$45</p>
+                <ul class="text-sm space-y-2 opacity-70">
+                    <li>Ilustración de muslos hacia arriba</li>
+                    <li>Iluminación avanzada</li>
+                </ul>
+            </div>
+            <div class="card p-6 rounded-3xl text-center">
+                <img src="assets/fullbody.jpg" class="w-full aspect-[2/3] rounded-xl mb-4 object-cover">
+                <h3 class="text-xl font-bold">Full Body</h3>
+                <p class="text-3xl font-black text-green-500 mb-4">$65</p>
+                <ul class="text-sm space-y-2 opacity-70">
+                    <li>Personaje completo</li>
+                    <li>Pose dinámica</li>
+                </ul>
             </div>
         </div>
     </section>
 
-    <!-- ADMIN PANEL OVERLAY -->
-    <div id="admin-panel" class="fixed inset-0 bg-black/80 z-[60] hidden flex items-center justify-center p-4">
-        <div class="bg-white rounded-3xl w-full max-w-2xl p-8 shadow-2xl relative overflow-y-auto max-h-[90vh]">
-            <button onclick="document.getElementById('admin-panel').classList.add('hidden')" class="absolute top-4 right-4 text-2xl text-gray-400">&times;</button>
-            <h2 class="text-2xl font-bold mb-6 gradient-text">Admin Dashboard</h2>
-            
-            <div id="login-form">
-                <p class="mb-4 text-gray-600">Please enter your credentials to manage the portfolio.</p>
-                <input type="email" id="admin-email" placeholder="Email" class="w-full p-3 border rounded-xl mb-4 outline-none focus:ring-2 ring-pink-300">
-                <input type="password" id="admin-pass" placeholder="Password" class="w-full p-3 border rounded-xl mb-6 outline-none focus:ring-2 ring-pink-300">
-                <button id="do-login" class="w-full bg-pink-400 text-white py-3 rounded-xl font-bold hover:bg-pink-500">Login</button>
+    <!-- ADMIN PANEL -->
+    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
+        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
+            <h3 class="font-bold">Admin Panel</h3>
+            <button onclick="switchAdminTab('chat')" class="p-2 border rounded bg-white text-sm">Chats</button>
+            <button onclick="switchAdminTab('portfolio')" class="p-2 border rounded bg-white text-sm">Subir Arte</button>
+        </div>
+        <div class="flex-1 flex flex-col">
+            <div id="admin-chat-section" class="flex-1 flex">
+                <div id="admin-chat-list" class="w-1/3 border-r overflow-y-auto"></div>
+                <div class="flex-1 flex flex-col">
+                    <div id="chat-admin-title" class="p-4 border-b font-bold">Selecciona un chat</div>
+                    <div id="admin-messages-area" class="flex-1 p-4 bg-gray-100 overflow-y-auto"></div>
+                    <div class="p-4 border-t flex gap-2">
+                        <input type="text" id="admin-chat-input" class="flex-1 border p-2 rounded" placeholder="Responder...">
+                        <button onclick="sendMessageAdmin()" class="bg-blue-500 text-white px-4 rounded">Enviar</button>
+                    </div>
+                </div>
             </div>
-
-            <div id="admin-content" class="hidden">
-                <div class="mb-8 p-4 bg-pink-50 rounded-2xl border border-pink-100">
-                    <h3 class="font-bold mb-4">Add New Work</h3>
-                    <input type="file" id="image-upload" accept="image/*" class="block w-full text-sm text-gray-500 mb-4 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-pink-50 file:text-pink-700 hover:file:bg-pink-100">
-                    <input type="text" id="image-title" placeholder="Art Title" class="w-full p-3 border rounded-xl mb-4">
-                    <button id="upload-btn" class="w-full bg-pink-400 text-white py-3 rounded-xl font-bold flex items-center justify-center space-x-2">
-                        <i class="fas fa-cloud-upload-alt"></i>
-                        <span>Upload to Portfolio</span>
-                    </button>
-                    <div id="upload-status" class="mt-2 text-sm text-center font-medium"></div>
+            <div id="admin-portfolio-section" class="hidden p-10 overflow-y-auto">
+                <h2 class="text-2xl font-bold mb-4">Gestor de Galería</h2>
+                <div class="max-w-md bg-white border p-6 rounded-xl shadow-sm mb-8">
+                    <input type="text" id="art-title" class="w-full border p-2 rounded mb-3" placeholder="Título del arte">
+                    <label class="flex items-center gap-2 mb-3 text-sm">
+                        <input type="checkbox" id="art-nsfw"> ¿Es contenido NSFW?
+                    </label>
+                    <input type="file" id="art-file" class="w-full mb-3 text-xs">
+                    <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-2 rounded font-bold">Subir a la Galería</button>
+                    <p id="upload-status" class="text-center text-xs mt-2"></p>
                 </div>
-
-                <h3 class="font-bold mb-4">Manage Current Art</h3>
-                <div id="manage-grid" class="grid grid-cols-2 gap-4">
-                    <!-- Art pieces with delete buttons -->
-                </div>
+                <h3 class="font-bold mb-4">Arte subido:</h3>
+                <div id="admin-portfolio-list"></div>
             </div>
         </div>
     </div>
 
-    <!-- FIREBASE & LOGIC -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+    <!-- Chat Client -->
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 bg-blue-400 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg cursor-pointer">
+        <i class="fas fa-comment-dots text-2xl"></i>
+    </div>
+    <div id="chat-window" class="fixed bottom-24 right-6 w-80 h-96 bg-white rounded-2xl shadow-2xl z-50 hidden flex flex-col overflow-hidden border">
+        <div class="bg-blue-400 p-4 text-white font-bold">Skai Assist</div>
+        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50"></div>
+        <div class="p-3 border-t flex gap-2">
+            <input type="text" id="chat-input" class="flex-1 border rounded-full px-4 text-sm" placeholder="Escribe algo...">
+            <button onclick="sendMessage()" class="bg-blue-400 text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
 
-        const firebaseConfig = JSON.parse(window.__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
-        const storage = getStorage(app);
-        const appId = window.__app_id || 'skai-portfolio';
-
-        // 1. ESCUCHAR CAMBIOS EN LA COLECCIÓN DE ARTE (Real-time Gallery)
-        const artCollection = collection(db, 'artifacts', appId, 'public', 'data', 'artwork');
-        const artQuery = query(artCollection, orderBy('createdAt', 'desc'));
-
-        onSnapshot(artQuery, (snapshot) => {
-            const gallery = document.getElementById('gallery-grid');
-            const manageGrid = document.getElementById('manage-grid');
-            
-            if (snapshot.empty) {
-                gallery.innerHTML = '<div class="col-span-full py-20 text-gray-400"><p>No work uploaded yet. Check back soon!</p></div>';
-                manageGrid.innerHTML = '<p class="text-sm text-gray-400">No images found.</p>';
-                return;
-            }
-
-            gallery.innerHTML = '';
-            manageGrid.innerHTML = '';
-
-            snapshot.forEach((docSnap) => {
-                const art = docSnap.data();
-                const id = docSnap.id;
-
-                // Agregar a la galería pública
-                gallery.innerHTML += `
-                    <div class="group relative overflow-hidden rounded-3xl bg-pink-100 card-hover shadow-lg aspect-square">
-                        <img src="${art.url}" alt="${art.title}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110">
-                        <div class="absolute inset-0 bg-gradient-to-t from-pink-500/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6 text-white text-left">
-                            <h3 class="text-xl font-bold">${art.title || 'Untitled'}</h3>
-                            <p class="text-sm opacity-80">Digital Illustration</p>
-                        </div>
-                    </div>
-                `;
-
-                // Agregar al panel de gestión (borrar)
-                manageGrid.innerHTML += `
-                    <div class="relative rounded-lg overflow-hidden border border-gray-200 aspect-square group">
-                        <img src="${art.url}" class="w-full h-full object-cover">
-                        <button onclick="deleteArt('${id}', '${art.storagePath}')" class="absolute inset-0 bg-red-500/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
-                            <i class="fas fa-trash-alt text-2xl"></i>
-                        </button>
-                    </div>
-                `;
-            });
-        }, (error) => console.error("Error fetching gallery:", error));
-
-        // 2. LÓGICA DE SUBIDA
-        document.getElementById('upload-btn').addEventListener('click', async () => {
-            const fileInput = document.getElementById('image-upload');
-            const titleInput = document.getElementById('image-title');
-            const status = document.getElementById('upload-status');
-            
-            if (!fileInput.files[0]) {
-                status.innerText = "❌ Please select a file first.";
-                status.className = "mt-2 text-sm text-red-500";
-                return;
-            }
-
-            const file = fileInput.files[0];
-            const title = titleInput.value || "Untitled";
-            const storagePath = `portfolio/${Date.now()}_${file.name}`;
-            const storageRef = ref(storage, storagePath);
-
-            try {
-                status.innerText = "⏳ Uploading magical dust...";
-                status.className = "mt-2 text-sm text-blue-500";
-
-                const uploadResult = await uploadBytes(storageRef, file);
-                const downloadURL = await getDownloadURL(uploadResult.ref);
-
-                await addDoc(artCollection, {
-                    title: title,
-                    url: downloadURL,
-                    storagePath: storagePath,
-                    createdAt: serverTimestamp()
-                });
-
-                status.innerText = "✨ Successfully added to gallery!";
-                status.className = "mt-2 text-sm text-green-500";
-                fileInput.value = '';
-                titleInput.value = '';
-            } catch (error) {
-                console.error(error);
-                status.innerText = "❌ Error uploading: " + error.message;
-                status.className = "mt-2 text-sm text-red-500";
-            }
-        });
-
-        // 3. LÓGICA DE BORRADO
-        window.deleteArt = async (id, storagePath) => {
-            if (!confirm("Are you sure you want to delete this piece?")) return;
-            try {
-                // Borrar de Firestore
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'artwork', id));
-                // Borrar de Storage
-                const storageRef = ref(storage, storagePath);
-                await deleteObject(storageRef);
-            } catch (error) {
-                console.error("Delete failed:", error);
-            }
-        };
-
-        // 4. LÓGICA DE AUTH
-        const adminBtn = document.getElementById('admin-login-btn');
-        const adminPanel = document.getElementById('admin-panel');
-        const loginForm = document.getElementById('login-form');
-        const adminContent = document.getElementById('admin-content');
-
-        adminBtn.addEventListener('click', () => adminPanel.classList.remove('hidden'));
-
-        document.getElementById('do-login').addEventListener('click', async () => {
-            const email = document.getElementById('admin-email').value;
-            const pass = document.getElementById('admin-pass').value;
-            try {
-                await signInWithEmailAndPassword(auth, email, pass);
-            } catch (e) {
-                alert("Login failed: " + e.message);
-            }
-        });
-
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                loginForm.classList.add('hidden');
-                adminContent.classList.remove('hidden');
-            } else {
-                loginForm.classList.remove('hidden');
-                adminContent.classList.add('hidden');
-            }
-        });
+    <script>
+        let isNSFW = false;
+        function openAgeModal() { document.getElementById('age-modal').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('age-modal').classList.add('hidden'); }
+        function confirmNSFW() {
+            isNSFW = !isNSFW;
+            document.body.classList.toggle('nsfw-mode', isNSFW);
+            closeModal();
+            // Refrescar galería cuando se cambia el modo
+            if(window.renderPortfolio) window.renderPortfolio();
+        }
     </script>
 </body>
 </html>
