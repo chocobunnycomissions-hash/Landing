@@ -15,12 +15,11 @@
     <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
         // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
-        const firebaseConfig = {
+        const firebaseConfigRaw = {
             apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
             authDomain: "skai-chat-4eeab.firebaseapp.com",
             projectId: "skai-chat-4eeab",
@@ -29,6 +28,10 @@
             appId: "1:881808601018:web:a0c47a21765bb3fdda7783",
             measurementId: "G-7Z3XTYL288"
         };
+        
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfigRaw;
+        // ID de la App para las rutas protegidas
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'skai-default';
 
         const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
@@ -37,10 +40,23 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
-        const storage = getStorage(app);
 
         let currentUser = null;
         let currentChatId = null;
+        let unsubscribePortfolio = null;
+
+        // --- AUTH INIT (Manejo robusto de tokens) ---
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth Error:", error);
+            }
+        };
 
         // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
@@ -48,6 +64,9 @@
             const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
 
             if (user) {
+                // Solo cargamos datos cuando estamos seguros de que hay usuario
+                setupPortfolioListener();
+
                 if (user.uid === ADMIN_UID) {
                     if (wantsAdmin) {
                         document.getElementById('admin-login-modal').classList.add('hidden');
@@ -65,22 +84,36 @@
                     }
                 }
             } else {
-                if (wantsAdmin) {
-                    document.getElementById('admin-login-modal').classList.remove('hidden');
-                } else {
-                    signInAnonymously(auth);
-                }
+                // Si se desconecta, limpiamos listeners
+                if (unsubscribePortfolio) unsubscribePortfolio();
+                if (wantsAdmin) document.getElementById('admin-login-modal').classList.remove('hidden');
             }
         });
 
+        // Llamada inicial de Auth
+        initAuth();
+
+        // --- RUTAS SEGURAS (HELPER) ---
+        const getPublicCollection = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+        const getPublicDoc = (colName, docId) => doc(db, 'artifacts', appId, 'public', 'data', colName, docId);
+
         // --- CARGA DINÁMICA DE PORTAFOLIO ---
         function setupPortfolioListener() {
-            const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
-            onSnapshot(q, (snapshot) => {
+            if (!currentUser) return;
+            if (unsubscribePortfolio) unsubscribePortfolio();
+
+            // Usamos la ruta segura 'artifacts/{appId}/public/data/portfolio'
+            const q = query(getPublicCollection("portfolio")); // Quitamos orderBy temporalmente para evitar error de índice
+            
+            unsubscribePortfolio = onSnapshot(q, (snapshot) => {
                 const items = [];
                 snapshot.forEach((doc) => {
                     items.push({ id: doc.id, ...doc.data() });
                 });
+                
+                // Ordenar en cliente (JS) para evitar requerir índices compuestos complejos
+                items.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
                 window.portfolioData = items;
                 
                 if (typeof window.renderPortfolio === 'function') {
@@ -90,36 +123,35 @@
                 if (currentUser && currentUser.uid === ADMIN_UID) {
                     renderAdminPortfolioList(items);
                 }
+            }, (error) => {
+                console.error("Error leyendo portafolio:", error);
             });
         }
-        setupPortfolioListener();
 
         function renderPortfolio() {
             const grid = document.getElementById('portfolio-grid');
             const existingDynamic = document.querySelectorAll('.dynamic-item');
             existingDynamic.forEach(e => e.remove());
 
-            const staticItems = Array.from(document.querySelectorAll('.static-portfolio-item'));
+            const data = window.portfolioData || [];
 
-            if (window.portfolioData) {
-                window.portfolioData.forEach((item) => {
-                    if (!isNSFW && item.nsfw) return; 
+            data.forEach((item) => {
+                if (!isNSFW && item.nsfw) return; 
 
-                    const div = document.createElement('div');
-                    div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
-                    
-                    if(item.nsfw) div.classList.add("border-2", "border-red-500");
+                const div = document.createElement('div');
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
+                
+                if(item.nsfw) div.classList.add("border-2", "border-red-500");
 
-                    div.innerHTML = `
-                        <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
-                            <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
-                            ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
-                        </div>
-                        <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
-                    `;
-                    grid.insertBefore(div, grid.firstChild); 
-                });
-            }
+                div.innerHTML = `
+                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
+                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
+                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
+                    </div>
+                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
+                `;
+                grid.insertBefore(div, grid.firstChild); 
+            });
         }
 
         // --- FUNCIONES ADMIN ---
@@ -127,6 +159,7 @@
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
             const btn = document.getElementById('login-btn');
+            
             btn.innerText = "Verificando...";
             try {
                 await signInWithEmailAndPassword(auth, email, pass);
@@ -136,6 +169,38 @@
             }
         };
 
+        // --- COMPRESIÓN DE IMAGEN ---
+        function compressImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const MAX_WIDTH = 800;
+                        const MAX_HEIGHT = 800;
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > height) {
+                            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                        } else {
+                            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', 0.7));
+                    };
+                    img.onerror = reject;
+                };
+                reader.onerror = reject;
+            });
+        }
+
+        // --- SUBIDA DE ARTE ---
         window.uploadArt = async () => {
             if (currentUser.uid !== ADMIN_UID) return; 
             
@@ -144,33 +209,32 @@
             const isNsfw = document.getElementById('art-nsfw').checked;
             const status = document.getElementById('upload-status');
 
-            if (!file) return alert("Selecciona un archivo");
+            if (!file) { alert("Por favor selecciona un archivo."); return; }
 
-            status.innerText = "Subiendo...";
+            status.innerText = "Procesando...";
             status.className = "text-blue-500 text-xs font-bold mt-2 text-center";
 
             try {
-                const storageRef = ref(storage, `portfolio/${Date.now()}_${file.name}`);
-                const snapshot = await uploadBytes(storageRef, file);
-                const url = await getDownloadURL(snapshot.ref);
-
-                await addDoc(collection(db, "portfolio"), {
+                const base64Image = await compressImage(file);
+                
+                // Usamos ruta segura
+                await addDoc(getPublicCollection("portfolio"), {
                     title: title || "Sin título",
-                    imageUrl: url,
+                    imageUrl: base64Image,
                     nsfw: isNsfw, 
-                    storagePath: snapshot.metadata.fullPath,
+                    storagePath: null,
                     createdAt: serverTimestamp()
                 });
                 
-                status.innerText = "¡Publicado con éxito!";
+                status.innerText = "¡Listo!";
                 status.className = "text-green-500 text-xs font-bold mt-2 text-center";
                 
                 document.getElementById('art-file').value = "";
                 document.getElementById('art-title').value = "";
-                document.getElementById('art-nsfw').checked = false;
-                
                 setTimeout(() => status.innerText = "", 3000);
+
             } catch (e) { 
+                console.error("Error upload:", e);
                 status.innerText = "Error: " + e.message; 
                 status.className = "text-red-500 text-xs font-bold mt-2 text-center";
             }
@@ -192,7 +256,7 @@
                             <span class="text-xs ${item.nsfw ? 'text-red-500 font-bold' : 'text-green-500'}">${item.nsfw ? 'NSFW' : 'SFW'}</span>
                         </div>
                     </div>
-                    <button class="text-red-400 hover:text-red-600 bg-white p-2 rounded-full shadow-sm border border-gray-100 hover:bg-red-50" onclick="deleteArt('${item.id}', '${item.storagePath}')">
+                    <button class="text-red-400 hover:text-red-600 bg-white p-2 rounded-full shadow-sm border border-gray-100 hover:bg-red-50" onclick="deleteArt('${item.id}', null)">
                         <i class="fas fa-trash-alt"></i>
                     </button>
                 `;
@@ -201,13 +265,9 @@
         }
 
         window.deleteArt = async (docId, storagePath) => {
-            if(!confirm("¿Seguro que quieres borrar esta imagen?")) return;
+            if(!confirm("¿Borrar imagen?")) return;
             try {
-                await deleteDoc(doc(db, "portfolio", docId));
-                if (storagePath) {
-                    const imgRef = ref(storage, storagePath);
-                    await deleteObject(imgRef).catch(e => console.log("Img ya borrada"));
-                }
+                await deleteDoc(getPublicDoc("portfolio", docId));
             } catch(e) { alert("Error: " + e.message); }
         }
 
@@ -215,20 +275,26 @@
             document.getElementById('admin-chat-panel').classList.remove('hidden');
             document.getElementById('chat-trigger-btn').classList.add('hidden'); 
             
-            const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
+            // Usar ruta segura para chats
+            const q = query(getPublicCollection("chats")); // Sin orderBy para evitar errores iniciales
+            
             onSnapshot(q, (snapshot) => {
                 const list = document.getElementById('admin-chat-list');
                 list.innerHTML = '';
-                snapshot.forEach(docSnap => {
-                    const chat = docSnap.data();
+                const chats = [];
+                snapshot.forEach(d => chats.push({id: d.id, ...d.data()}));
+                // Ordenar chats en cliente
+                chats.sort((a,b) => (b.lastMessageTime?.seconds || 0) - (a.lastMessageTime?.seconds || 0));
+
+                chats.forEach(chat => {
                     const div = document.createElement('div');
                     div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
                     div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
-                    div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
+                    div.onclick = () => loadAdminChat(chat.id, chat.clientName);
                     list.appendChild(div);
                 });
             });
-            renderAdminPortfolioList(window.portfolioData || []);
+            if(window.portfolioData) renderAdminPortfolioList(window.portfolioData);
         }
 
         window.loadAdminChat = (id, name) => {
@@ -236,7 +302,10 @@
             document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
             const area = document.getElementById('admin-messages-area');
             
-            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            // Ruta segura para mensajes: 'chats' -> doc -> 'messages'
+            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
+            const q = query(msgsRef, orderBy("timestamp", "asc"));
+
             onSnapshot(q, (snapshot) => {
                 area.innerHTML = '';
                 snapshot.forEach(d => {
@@ -247,6 +316,22 @@
                     </div>`;
                 });
                 area.scrollTop = area.scrollHeight;
+            }, (err) => {
+                // Si falla por índice, intenta sin orderBy y ordena en cliente
+                console.warn("Intentando fallback sin orderby...", err);
+                const q2 = query(msgsRef);
+                onSnapshot(q2, (snap) => {
+                    area.innerHTML = '';
+                    const msgs = [];
+                    snap.forEach(d => msgs.push(d.data()));
+                    msgs.sort((a,b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+                    msgs.forEach(m => {
+                        const isMe = m.senderId === ADMIN_UID;
+                        area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                            <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border border-gray-200'} px-3 py-2 rounded-lg text-sm shadow-sm">${m.text}</div>
+                        </div>`;
+                    });
+                });
             });
         };
 
@@ -257,7 +342,8 @@
 
             if (!currentChatId) {
                 try {
-                    const chatRef = await addDoc(collection(db, "chats"), {
+                    // Ruta segura
+                    const chatRef = await addDoc(getPublicCollection("chats"), {
                         clientName: "Cliente " + currentUser.uid.slice(0,4),
                         lastMessage: msg,
                         lastMessageTime: serverTimestamp(),
@@ -273,14 +359,15 @@
             }
 
             if (currentChatId) {
-                await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', currentChatId, 'messages');
+                await addDoc(msgsRef, {
                     text: msg,
                     senderId: currentUser.uid,
                     senderName: currentUser.uid === ADMIN_UID ? "Skai" : "Cliente",
                     timestamp: serverTimestamp()
                 });
 
-                await setDoc(doc(db, "chats", currentChatId), {
+                await setDoc(getPublicDoc("chats", currentChatId), {
                     lastMessage: msg,
                     lastMessageTime: serverTimestamp(),
                     unread: currentUser.uid !== ADMIN_UID
@@ -291,7 +378,11 @@
         };
 
         function listenToChat(id) {
-            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', id, 'messages');
+            // Intentamos con orderBy, si falla el cliente debería ver el chat vacío o podríamos implementar fallback
+            // Para simplicidad en este entorno, usamos la query directa
+            const q = query(msgsRef, orderBy("timestamp", "asc"));
+            
             onSnapshot(q, (snapshot) => {
                 const area = document.getElementById('chat-messages');
                 area.innerHTML = '';
@@ -316,14 +407,15 @@
         if(adminInput) {
             const sendAdmin = async () => {
                 const txt = adminInput.value.trim();
-                if(txt) { 
-                    await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                if(txt && currentChatId) { 
+                    const msgsRef = collection(db, 'artifacts', appId, 'public', 'data', 'chats', currentChatId, 'messages');
+                    await addDoc(msgsRef, {
                         text: txt,
                         senderId: currentUser.uid,
                         senderName: "Skai",
                         timestamp: serverTimestamp()
                     });
-                    await setDoc(doc(db, "chats", currentChatId), {
+                    await setDoc(getPublicDoc("chats", currentChatId), {
                         lastMessage: txt,
                         lastMessageTime: serverTimestamp(),
                         unread: false 
@@ -730,8 +822,8 @@
                 document.getElementById('img3').src = "assets/art3-nsfw.jpg";
                 
                 // RUTAS NSFW ACTUALIZADAS CON TUS NOMBRES EXACTOS
-                document.getElementById('ex-headshot').src = "assets/headshoT_NSFW.png";
-                document.getElementById('ex-halfbody').src = "assets/Halfbody_NSFW.png";
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
+                document.getElementById('ex-halfbody').src = "assets/Halfbody.png";
                 document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
                 
                 document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
@@ -848,4 +940,3 @@
     </script>
 </body>
 </html>
-
