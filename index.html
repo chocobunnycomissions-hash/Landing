@@ -1,7 +1,11 @@
-// Existing code above this line
-function renderPortfolio(items) {
-    // ... other existing code ...
-    return isNSFW ? item.nsfw : !item.nsfw; 
-    // ... other existing code ...
+function renderPortfolio(images, filter) {
+    const filteredImages = images.filter(image => {
+        if (filter === 'SFW') {
+            return !image.nsfw;
+        } else if (filter === 'NSFW') {
+            return image.nsfw;
+        }
+        return true; // If no filter is applied, return all images
+    });
+    // code to display images
 }
-// Existing code below this line
