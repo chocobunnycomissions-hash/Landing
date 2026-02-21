@@ -1,11 +1,926 @@
-function renderPortfolio(images, filter) {
-    const filteredImages = images.filter(image => {
-        if (filter === 'SFW') {
-            return !image.nsfw;
-        } else if (filter === 'NSFW') {
-            return image.nsfw;
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skai Chocobunny | Digital Artist</title>
+    
+    <!-- FAVICON -->
+    <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
+
+    <!-- ESTILOS Y FUENTES -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDVOoGOOPriVbhALk9gVZUGcYJVK0iyJss",
+            authDomain: "skai-chat-4eeab.firebaseapp.com",
+            projectId: "skai-chat-4eeab",
+            storageBucket: "skai-chat-4eeab.firebasestorage.app",
+            messagingSenderId: "881808601018",
+            appId: "1:881808601018:web:a0c47a21765bb3fdda7783",
+            measurementId: "G-7Z3XTYL288"
+        };
+
+        const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
+        const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let currentUser = null;
+        let currentChatId = null;
+
+        // --- ESTADO GLOBAL DE LA GALERÍA ---
+        window.portfolioItemsToShow = 3; 
+        
+        // Listas de datos unificadas
+        window.firebaseItems = [];
+        window.galleryItems = []; // Aquí puedes poner tus imágenes estáticas después
+
+        // --- SISTEMA DE AUTENTICACIÓN ---
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
+
+            if (user) {
+                if (user.uid === ADMIN_UID) {
+                    if (wantsAdmin) {
+                        document.getElementById('admin-login-modal').classList.add('hidden');
+                        initAdminPanel();
+                    }
+                } else {
+                    if (wantsAdmin) {
+                        document.getElementById('admin-login-modal').classList.remove('hidden');
+                    } else {
+                        const savedChatId = localStorage.getItem('skai_chat_id');
+                        if (savedChatId) {
+                            currentChatId = savedChatId;
+                            listenToChat(currentChatId);
+                        }
+                    }
+                }
+            } else {
+                if (wantsAdmin) {
+                    document.getElementById('admin-login-modal').classList.remove('hidden');
+                } else {
+                    signInAnonymously(auth);
+                }
+            }
+        });
+
+        // --- CARGA DINÁMICA DE PORTAFOLIO (FIREBASE) ---
+        function setupPortfolioListener() {
+            const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
+            onSnapshot(q, (snapshot) => {
+                window.firebaseItems = [];
+                const allItemsForAdmin = []; 
+
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    // Importante: Le añadimos type: 'dynamic' para que el filtro nuevo funcione
+                    const item = { id: doc.id, type: 'dynamic', ...data };
+                    
+                    // Asegurar que nsfw sea booleano
+                    item.nsfw = item.nsfw === true || item.nsfw === "true";
+                    
+                    allItemsForAdmin.push(item);
+                    window.firebaseItems.push(item);
+                });
+                
+                if (typeof window.renderPortfolio === 'function') {
+                    window.renderPortfolio();
+                }
+
+                if (currentUser && currentUser.uid === ADMIN_UID) {
+                    renderAdminPortfolioList(allItemsForAdmin);
+                }
+            });
         }
-        return true; // If no filter is applied, return all images
-    });
-    // code to display images
-}
+        setupPortfolioListener();
+
+        // --- MOTOR DE RENDERIZADO DE GALERÍA (NUEVA LÓGICA DE FILTRADO) ---
+        window.renderPortfolio = function() {
+            const grid = document.getElementById('portfolio-grid');
+            if (!grid) return;
+            
+            grid.innerHTML = '';
+            
+            const allData = [...window.firebaseItems, ...window.galleryItems];
+            
+            // ✅ FILTRO CORRECTO: Mostrar solo imágenes que coincidan con el modo actual
+            const filteredData = allData.filter(item => {
+                if (item.type === 'dynamic') {
+                    // Si estamos en NSFW, mostrar solo NSFW
+                    // Si estamos en SFW, mostrar solo SFW
+                    return window.isNSFW ? item.nsfw : !item.nsfw;
+                }
+                return true; // Las estáticas se manejan con su lógica propia
+            });
+            
+            const itemsToRender = filteredData.slice(0, window.portfolioItemsToShow);
+
+            // Mensaje si no hay items
+            const noItemsMsg = document.getElementById('no-items-message');
+            if (filteredData.length === 0) {
+                noItemsMsg.classList.remove('hidden');
+            } else {
+                noItemsMsg.classList.add('hidden');
+            }
+
+            itemsToRender.forEach((item) => {
+                const div = document.createElement('div');
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group chat-anim";
+                
+                let currentImgUrl = '';
+                let isItemNsfw = false;
+
+                if (item.type === 'dynamic') {
+                    currentImgUrl = item.imageUrl;
+                    isItemNsfw = item.nsfw;
+                } else {
+                    currentImgUrl = window.isNSFW ? item.nsfwUrl : item.sfwUrl;
+                    isItemNsfw = window.isNSFW; 
+                }
+
+                if(isItemNsfw) div.classList.add("border-2", "border-red-500");
+
+                div.innerHTML = `
+                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
+                        <span class="text-white font-bold text-xl text-center mb-2 drop-shadow-md">${item.title || 'Sin título'}</span>
+                        ${isItemNsfw ? '<span class="bg-red-600 text-white text-xs px-3 py-1 rounded-full font-bold shadow-sm uppercase tracking-wider">NSFW Content</span>' : '<span class="bg-white/20 text-white text-xs px-3 py-1 rounded-full font-bold">View</span>'}
+                    </div>
+                    <img src="${currentImgUrl}" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110">
+                `;
+                grid.appendChild(div); 
+            });
+
+            const btnContainer = document.getElementById('show-more-container');
+            if (filteredData.length > window.portfolioItemsToShow) {
+                btnContainer.classList.remove('hidden');
+            } else {
+                btnContainer.classList.add('hidden');
+            }
+        }
+
+        window.loadMorePortfolio = function() {
+            window.portfolioItemsToShow += 3;
+            window.renderPortfolio(); 
+        }
+
+        // --- COMPRESOR DE IMÁGENES CLIENT-SIDE ---
+        function compressImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        const MAX_SIZE = 1600; 
+
+                        if (width > height) {
+                            if (width > MAX_SIZE) {
+                                height = Math.round(height * (MAX_SIZE / width));
+                                width = MAX_SIZE;
+                            }
+                        } else {
+                            if (height > MAX_SIZE) {
+                                width = Math.round(width * (MAX_SIZE / height));
+                                height = MAX_SIZE;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        const dataUrl = canvas.toDataURL('image/webp', 0.85); 
+                        resolve(dataUrl);
+                    };
+                    img.onerror = error => reject(error);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        // --- FUNCIONES ADMIN ---
+        window.loginAdmin = async () => {
+            const email = document.getElementById('admin-email').value;
+            const pass = document.getElementById('admin-pass').value;
+            const btn = document.getElementById('login-btn');
+            btn.innerText = "Verificando...";
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+            } catch (e) { 
+                alert("Error de acceso: " + e.message); 
+                btn.innerText = "Entrar";
+            }
+        };
+
+        window.uploadArt = async () => {
+            if (currentUser.uid !== ADMIN_UID) return; 
+            
+            const fileInput = document.getElementById('art-file');
+            const file = fileInput.files[0];
+            const title = document.getElementById('art-title').value;
+            const isNsfw = document.getElementById('art-nsfw').checked;
+            const status = document.getElementById('upload-status');
+
+            if (!file) {
+                alert("Por favor selecciona un archivo.");
+                return;
+            }
+
+            status.innerText = "Comprimiendo y optimizando imagen...";
+            status.className = "text-blue-500 text-xs font-bold mt-2 text-center";
+
+            try {
+                const compressedBase64 = await compressImage(file);
+                
+                if(compressedBase64.length > 1048400) {
+                    throw new Error("La imagen sigue siendo muy grande. Intenta recortarla.");
+                }
+
+                status.innerText = "Guardando en la galería...";
+                
+                await addDoc(collection(db, "portfolio"), {
+                    title: title || "Sin título",
+                    imageUrl: compressedBase64,
+                    nsfw: isNsfw,
+                    createdAt: serverTimestamp()
+                });
+                
+                status.innerText = "¡Arte publicado con éxito!";
+                status.className = "text-green-500 text-xs font-bold mt-2 text-center";
+                
+                fileInput.value = "";
+                document.getElementById('art-title').value = "";
+                document.getElementById('art-nsfw').checked = false;
+                
+                setTimeout(() => status.innerText = "", 4000);
+
+            } catch (err) {
+                console.error(err);
+                status.innerText = "Error: " + err.message;
+                status.className = "text-red-500 text-xs font-bold mt-2 text-center";
+            }
+        };
+
+        function renderAdminPortfolioList(items) {
+            const list = document.getElementById('admin-portfolio-list');
+            if(!list) return;
+            list.innerHTML = '';
+            
+            items.forEach(item => {
+                const isNsfw = item.nsfw === true || item.nsfw === "true";
+                const div = document.createElement('div');
+                div.className = "flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200";
+                div.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <img src="${item.imageUrl}" class="w-12 h-12 object-cover rounded bg-white">
+                        <div>
+                            <p class="font-bold text-sm text-gray-700 truncate w-32">${item.title}</p>
+                            <span class="text-xs ${isNsfw ? 'text-red-500 font-bold' : 'text-green-500'}">${isNsfw ? 'NSFW' : 'SFW'}</span>
+                        </div>
+                    </div>
+                    <button class="text-red-400 hover:text-red-600 bg-white p-2 rounded-full shadow-sm border border-gray-100 hover:bg-red-50" onclick="deleteArt('${item.id}')">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        window.deleteArt = async (docId) => {
+            if(!confirm("¿Seguro que quieres borrar esta imagen?")) return;
+            try { await deleteDoc(doc(db, "portfolio", docId)); } catch(e) { alert("Error al borrar: " + e.message); }
+        }
+
+        function initAdminPanel() {
+            document.getElementById('admin-chat-panel').classList.remove('hidden');
+            document.getElementById('chat-trigger-btn').classList.add('hidden'); 
+            
+            const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
+            onSnapshot(q, (snapshot) => {
+                const list = document.getElementById('admin-chat-list');
+                list.innerHTML = '';
+                snapshot.forEach(docSnap => {
+                    const chat = docSnap.data();
+                    const div = document.createElement('div');
+                    div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
+                    div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
+                    div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
+                    list.appendChild(div);
+                });
+            });
+        }
+
+        window.loadAdminChat = (id, name) => {
+            currentChatId = id;
+            document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
+            const area = document.getElementById('admin-messages-area');
+            
+            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            onSnapshot(q, (snapshot) => {
+                area.innerHTML = '';
+                snapshot.forEach(d => {
+                    const m = d.data();
+                    const isMe = m.senderId === ADMIN_UID;
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border border-gray-200'} px-3 py-2 rounded-lg text-sm shadow-sm">${m.text}</div>
+                    </div>`;
+                });
+                area.scrollTop = area.scrollHeight;
+            });
+        };
+
+        // --- CHAT CLIENTE ---
+        window.sendMessage = async (textOverride = null) => {
+            const input = document.getElementById('chat-input');
+            const msg = textOverride || input.value.trim();
+            if (!msg) return;
+
+            if (!currentChatId) {
+                try {
+                    const chatRef = await addDoc(collection(db, "chats"), {
+                        clientName: "Cliente " + currentUser.uid.slice(0,4),
+                        lastMessage: msg,
+                        lastMessageTime: serverTimestamp(),
+                        unread: true
+                    });
+                    currentChatId = chatRef.id;
+                    localStorage.setItem('skai_chat_id', currentChatId);
+                    listenToChat(currentChatId);
+                    
+                    const emailForNotify = window.clientEmailForNotify || "Direct Chat";
+                    fetch(NOTIFICATION_WEBHOOK, { method: 'POST', mode: 'no-cors', body: JSON.stringify({message: msg, chatId: currentChatId, type: 'chat_order', email: emailForNotify}) });
+                } catch (e) { console.error("Error creating chat", e); }
+            }
+
+            if (currentChatId) {
+                await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                    text: msg,
+                    senderId: currentUser.uid,
+                    senderName: currentUser.uid === ADMIN_UID ? "Skai" : "Cliente",
+                    timestamp: serverTimestamp()
+                });
+
+                await setDoc(doc(db, "chats", currentChatId), {
+                    lastMessage: msg,
+                    lastMessageTime: serverTimestamp(),
+                    unread: currentUser.uid !== ADMIN_UID
+                }, { merge: true });
+
+                if (!textOverride) input.value = '';
+            }
+        };
+
+        function listenToChat(id) {
+            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            onSnapshot(q, (snapshot) => {
+                const area = document.getElementById('chat-messages');
+                area.innerHTML = '';
+                snapshot.forEach(d => {
+                    const m = d.data();
+                    const isMe = m.senderId === currentUser.uid;
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-gray-100 text-gray-800'} px-3 py-2 rounded-lg text-sm">${m.text}</div>
+                    </div>`;
+                });
+                area.scrollTop = area.scrollHeight;
+            });
+        }
+        
+        window.toggleChat = () => document.getElementById('chat-window').classList.toggle('hidden');
+        window.switchAdminTab = (tab) => {
+            document.getElementById('admin-chat-section').classList.toggle('hidden', tab !== 'chat');
+            document.getElementById('admin-portfolio-section').classList.toggle('hidden', tab !== 'portfolio');
+        };
+
+        const adminInput = document.getElementById('admin-chat-input');
+        if(adminInput) {
+            const sendAdmin = async () => {
+                const txt = adminInput.value.trim();
+                if(txt) { 
+                    await addDoc(collection(db, "chats", currentChatId, "messages"), {
+                        text: txt,
+                        senderId: currentUser.uid,
+                        senderName: "Skai",
+                        timestamp: serverTimestamp()
+                    });
+                    await setDoc(doc(db, "chats", currentChatId), {
+                        lastMessage: txt,
+                        lastMessageTime: serverTimestamp(),
+                        unread: false 
+                    }, { merge: true });
+                    adminInput.value = ''; 
+                }
+            };
+            document.getElementById('admin-send-btn').onclick = sendAdmin;
+            adminInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') sendAdmin(); });
+        }
+
+        window.logoutAdmin = async () => { 
+            await signOut(auth); 
+            window.location.href = window.location.pathname; 
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const chatInput = document.getElementById('chat-input');
+            if (chatInput) {
+                chatInput.addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
+            }
+        });
+
+    </script>
+
+    <style>
+        :root {
+            --text-main: #5D5D5D; --text-inverse: #FFFFFF; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
+            --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
+            --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
+            --color-accent: #B9FBC0; --color-accent-dark: #98FB98;
+            --hero-gradient-start: var(--color-primary); --hero-gradient-end: var(--color-secondary);
+        }
+        body.nsfw-mode {
+            --text-main: #E0E0E0; --text-inverse: #000000; --bg-body: #0a0a0a; --bg-card: #141414;
+            --color-primary: #8B0000; --color-primary-dark: #FF0000;
+            --color-secondary: #00008B; --color-secondary-dark: #1E90FF;
+            --color-accent: #C62828; --color-accent-dark: #B71C1C;
+            --hero-gradient-start: #2b0505; --hero-gradient-end: #020a24;
+        }
+        body { background-color: var(--bg-body); color: var(--text-main); font-family: 'Segoe UI', sans-serif; transition: background 0.5s ease, color 0.5s ease; }
+        .hero-gradient { background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%); transition: background 0.5s ease; }
+        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: 0.3s ease; }
+        .card:hover { transform: translateY(-5px); }
+        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s ease; }
+        body.nsfw-mode .btn-primary { color: white; }
+        .btn-primary:hover { background-color: var(--color-accent-dark); transform: scale(1.05); }
+        #age-modal, #order-summary-modal, #admin-login-modal { backdrop-filter: blur(8px); }
+        #mobile-menu { transition: max-height 0.3s ease-in-out; max-height: 0; overflow: hidden; }
+        #mobile-menu.open { max-height: 300px; }
+        .chat-anim { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes popIn { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
+    </style>
+</head>
+<body class="antialiased relative">
+
+    <!-- LOGIN ADMIN MODAL -->
+    <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
+        <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
+            <h2 class="text-2xl font-bold mb-4 text-gray-700">Admin Access</h2>
+            <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3">
+            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4">
+            <button id="login-btn" onclick="loginAdmin()" class="w-full bg-blue-500 text-white py-3 rounded font-bold hover:bg-blue-600">Enter</button>
+            <a href="index.html" class="block mt-4 text-xs text-gray-400 hover:underline">Back to Site</a>
+        </div>
+    </div>
+
+    <!-- AGE VERIFICATION MODAL -->
+    <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
+        <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center">
+            <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
+            <h3 class="text-3xl font-bold mb-2">NSFW Content Warning</h3>
+            <p class="mb-6 text-gray-300">Contains adult content. Are you 18+?</p>
+            <div class="flex flex-col gap-3">
+                <button onclick="confirmNSFW()" class="bg-red-600 hover:bg-red-700 text-white py-3 px-6 rounded-xl font-bold">YES, I am 18+</button>
+                <button onclick="closeModal()" class="bg-transparent border border-gray-600 text-gray-400 py-2 px-6 rounded-xl font-bold">No, take me back</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ORDER SUMMARY MODAL -->
+    <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
+        <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
+            <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
+            
+            <h3 class="text-3xl font-bold mb-4 text-center text-[var(--color-secondary-dark)]">Review Order</h3>
+            
+            <div class="bg-gray-50 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100">
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Type:</span><span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span></div>
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Bg:</span><span id="modal-bg">Simple</span></div>
+                <div class="flex justify-between"><span class="font-bold text-gray-600">Extra:</span><span id="modal-extra">No</span></div>
+                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black"><span>Total:</span><span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span></div>
+            </div>
+            <div class="mb-6">
+                <label class="block font-bold text-sm mb-2 text-gray-600">Your Email <span class="text-red-400">*</span></label>
+                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1"><i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i><span class="text-sm">Google Form</span></button>
+                <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 shadow-lg"><i class="fas fa-comments text-xl"></i><span class="text-sm">Discuss in Chat</span></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
+        <div class="flex justify-between items-center">
+            <div class="text-2xl font-bold flex items-center gap-2">
+                <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
+                    <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
+                </span>
+                <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
+                <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
+            </div>
+            
+            <button class="md:hidden text-[var(--text-main)]" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
+
+            <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
+                <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
+                <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
+                <a href="#tos" class="hover:text-[var(--color-primary-dark)] transition-colors">TOS</a>
+                <button onclick="openModal()" class="border-2 border-red-400 text-red-400 hover:bg-red-400 hover:text-white px-4 py-1 rounded-full text-sm font-bold transition-all">
+                    <i class="fas fa-exclamation-circle mr-1"></i> NSFW / 18+
+                </button>
+                <a href="#contact" class="btn-primary px-6 py-2 rounded-full font-bold shadow-sm text-sm">Contact Me</a>
+            </div>
+        </div>
+        <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-gray-500 text-center border-t border-gray-100 mt-4">
+            <a href="#portfolio">Portfolio</a><a href="#prices">Prices</a><button onclick="openModal()" class="text-red-400 font-bold">NSFW Mode</button>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
+        <div class="max-w-4xl mx-auto relative z-10">
+            <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
+                <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
+            </div>
+
+            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md transition-all">Atmospheric & Painterly Furry Art</h1>
+            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
+            <div class="flex flex-wrap justify-center gap-4">
+                <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Sale Prices</a>
+                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center">
+                    <i class="fab fa-trello mr-2"></i> Check Queue
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Portfolio -->
+    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto min-h-[600px]">
+        <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
+        
+        <p id="no-items-message" class="text-center text-gray-400 font-bold hidden py-10">There are no artworks in this category yet. Stay tuned!</p>
+
+        <!-- EL ÚNICO CONTENEDOR NECESARIO -->
+        <div id="portfolio-container" class="w-full">
+            <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8"></div>
+        </div>
+
+        <!-- BOTÓN SHOW MORE -->
+        <div id="show-more-container" class="mt-16 flex justify-center hidden w-full">
+            <button onclick="loadMorePortfolio()" class="bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)] px-12 py-5 rounded-full font-bold shadow-2xl flex items-center justify-center gap-3 hover:-translate-y-2 transition-all duration-300 text-xl border-4 border-white/50">
+                <i class="fas fa-plus-circle text-3xl"></i>
+                Show More Artwork
+            </button>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="prices" class="bg-[var(--color-primary)]/10 py-20 px-6 transition-colors duration-500">
+        <div class="max-w-6xl mx-auto">
+            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] transition-colors">Commission Rates</h2>
+            <p id="price-subtitle" class="text-center mb-16 opacity-70">
+                <span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE</span>
+                Special launch prices applied! (30% OFF)
+            </p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
+                    <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                        <img id="ex-headshot" src="assets/HeadshoT_SFW.png" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+                    <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
+                    <div id="price-headshot" class="mb-6 transition-all">
+                        <span class="text-gray-400 line-through text-xl block">$35</span>
+                        <span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span>
+                    </div>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
+                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
+                    </ul>
+                </div>
+
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
+                    <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
+                    <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                         <img id="ex-halfbody" src="assets/Halfbody.png" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+                    <h3 class="text-2xl font-bold mb-4">Half Body</h3>
+                    <div id="price-halfbody" class="mb-6 transition-all">
+                        <span class="text-gray-400 line-through text-xl block">$60</span>
+                        <span class="text-4xl font-black text-[var(--color-secondary)]">$45</span>
+                    </div>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
+                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
+                    </ul>
+                </div>
+
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
+                    <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
+                        <img id="ex-fullbody" src="assets/FullBody_SFW.png" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
+                    </div>
+                    <h3 class="text-2xl font-bold mb-4">Full Body</h3>
+                    <div id="price-fullbody" class="mb-6 transition-all">
+                        <span class="text-gray-400 line-through text-xl block">$90</span>
+                        <span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span>
+                    </div>
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
+                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Calculator -->
+    <section class="py-20 px-6 max-w-3xl mx-auto">
+        <div class="card p-10 rounded-3xl shadow-lg border border-[var(--color-secondary)]/30">
+            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Your Project</h3>
+            <div class="space-y-6">
+                <div>
+                    <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
+                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
+                        <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
+                        <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block font-bold mb-2 opacity-80">Background Complexity</label>
+                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10" onchange="calculate()">
+                        <option value="10">Simple (gradient colors) ($10)</option>
+                        <option value="40">Complex (environment, settings, etc) ($40)</option>
+                        <option value="50">Full Cinematic ($50)</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl">
+                    <input type="checkbox" id="extra" class="w-6 h-6 accent-[var(--color-primary)]" onchange="calculate()">
+                    <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
+                </div>
+                
+                <div class="pt-8 border-t border-dashed border-gray-400/30">
+                    <div class="flex justify-between items-center text-3xl font-black mb-8">
+                        <span class="opacity-80">Total Estimate:</span>
+                        <span id="total" class="text-[var(--color-accent-dark)]">$55</span>
+                    </div>
+                    
+                    <div class="flex flex-col md:flex-row gap-4 justify-center">
+                         <button onclick="openOrderModal()" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
+                            <i class="fas fa-clipboard-check"></i> Fill Order Form
+                        </button>
+                        <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
+                            <i class="fab fa-trello"></i> Check Queue
+                        </a>
+                    </div>
+                    
+                    <p class="text-center mt-6 text-sm opacity-70">
+                        Is this process too formal for you? Don't worry! <br>
+                        <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ADMIN PANEL -->
+    <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
+        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
+            <h3 class="font-bold text-lg text-gray-700">Admin Control</h3>
+            <button onclick="switchAdminTab('chat')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-blue-50 font-bold">💬 Messages</button>
+            <button onclick="switchAdminTab('portfolio')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-pink-50 font-bold">🖼️ Upload Art</button>
+            <div class="mt-auto">
+                <button onclick="logoutAdmin()" class="text-red-500 text-sm font-bold w-full text-center border p-2 rounded hover:bg-red-50">Logout</button>
+            </div>
+        </div>
+        
+        <div class="flex-1 p-0 flex relative">
+            <div id="admin-chat-section" class="flex-1 flex flex-col">
+                <div class="flex h-full">
+                    <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
+                    <div class="flex-1 flex flex-col">
+                        <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
+                        <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
+                        <div class="p-4 border-t bg-white flex gap-2">
+                            <input type="text" id="admin-chat-input" placeholder="Reply..." class="flex-1 border rounded-lg px-4 py-3">
+                            <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="admin-portfolio-section" class="hidden flex-1 p-10 bg-gray-50 h-full overflow-y-auto">
+                <h2 class="text-3xl font-bold mb-6 text-gray-800">Gallery Manager</h2>
+                
+                <div class="max-w-xl bg-white border p-8 rounded-2xl shadow-lg mb-8">
+                    <div class="mb-4">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Artwork Title</label>
+                        <input type="text" id="art-title" class="w-full border-2 border-gray-200 p-3 rounded-lg outline-none" placeholder="e.g. Cyber Bunny">
+                    </div>
+                    
+                    <div class="mb-4 flex items-center gap-3">
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="art-nsfw" class="sr-only peer">
+                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                            <span class="ml-3 text-sm font-bold text-gray-700">Is this content NSFW? 🔞</span>
+                        </label>
+                    </div>
+
+                    <div class="mb-6">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Image File (PNG/JPG)</label>
+                        <input type="file" id="art-file" accept="image/*" class="w-full border-2 border-gray-200 p-3 rounded-lg">
+                    </div>
+                    <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-4 rounded-xl font-bold hover:bg-green-600 transition shadow-lg">Upload to Portfolio</button>
+                    <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
+                </div>
+
+                <h3 class="text-xl font-bold text-gray-700 mb-4">Manage Uploaded Art</h3>
+                <div id="admin-portfolio-list" class="space-y-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CLIENT CHAT BUTTON & WINDOW -->
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white cursor-pointer animate-bounce chat-anim">
+        <i class="fas fa-comment-dots text-2xl"></i>
+    </div>
+    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
+        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
+            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
+        </div>
+        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
+        <div class="p-3 border-t bg-white flex gap-2">
+            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
+            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
+        </div>
+    </div>
+
+    <!-- SCRIPT PRINCIPAL DEL FRONT-END -->
+    <script>
+        window.isNSFW = false;
+
+        function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
+        function openModal() { window.isNSFW ? toggleMode(false) : document.getElementById('age-modal').classList.remove('hidden'); }
+        function closeModal() { document.getElementById('age-modal').classList.add('hidden'); }
+        function confirmNSFW() { closeModal(); toggleMode(true); }
+
+        function toggleMode(nsfw) {
+            window.isNSFW = nsfw; 
+            
+            const body = document.body;
+            const favicon = document.getElementById('dynamic-favicon');
+            const faviconImg = document.getElementById('dynamic-favicon-img');
+            
+            if (nsfw) {
+                body.classList.add('nsfw-mode');
+                favicon.href = "assets/logo_white.svg"; 
+                if(faviconImg) faviconImg.src = "assets/logo_white.svg";
+
+                document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
+                document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
+                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> NSFW Launch Promo applied!';
+                
+                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-500 line-through text-xl block">$50<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$35<\/span>';
+                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
+                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
+
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
+                document.getElementById('ex-halfbody').src = "assets/Halfbody_NSFW.png"; 
+                document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
+                
+                document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
+                document.getElementById('opt-head').value = 35;
+                document.getElementById('opt-half').innerText = "NSFW Half Body ($55) [PROMO]";
+                document.getElementById('opt-half').value = 55;
+                document.getElementById('opt-full').innerText = "NSFW Full Body ($85) [PROMO]";
+                document.getElementById('opt-full').value = 85;
+
+            } else {
+                body.classList.remove('nsfw-mode');
+                favicon.href = "assets/logo_sin_fondo.svg";
+                if(faviconImg) faviconImg.src = "assets/logo_sin_fondo.svg";
+
+                document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
+                document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
+                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> Special launch prices applied! (30% OFF)';
+
+                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-400 line-through text-xl block">$35<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25<\/span>';
+                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$60<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$45<\/span>';
+                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$90<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65<\/span>';
+                
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_SFW.png";
+                document.getElementById('ex-halfbody').src = "assets/Halfbody.png";
+                document.getElementById('ex-fullbody').src = "assets/FullBody_SFW.png";
+
+                document.getElementById('opt-head').innerText = "Headshot ($25) [PROMO]";
+                document.getElementById('opt-head').value = 25;
+                document.getElementById('opt-half').innerText = "Half Body ($45) [PROMO]";
+                document.getElementById('opt-half').value = 45;
+                document.getElementById('opt-full').innerText = "Full Body ($65) [PROMO]";
+                document.getElementById('opt-full').value = 65;
+            }
+
+            // Al cambiar de modo, renderizamos la galería de nuevo con el filtro actualizado
+            if (typeof window.renderPortfolio === 'function') {
+                window.renderPortfolio();
+            }
+            calculate();
+        }
+
+        function calculate() {
+            const base = parseFloat(document.getElementById('type').value);
+            const bg = parseFloat(document.getElementById('bg').value);
+            const extraChar = document.getElementById('extra').checked;
+            let total = base + bg;
+            if (extraChar) total += (base * 0.5);
+            document.getElementById('total').innerText = '$' + total.toFixed(0);
+        }
+
+        function goToForm(e) {
+            e.preventDefault();
+            const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
+            const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
+            const config = window.isNSFW ? NSFW_CONFIG : SFW_CONFIG;
+            const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
+
+            const typeVal = document.getElementById('type').value;
+            const bgVal = document.getElementById('bg').value;
+            const extraChar = document.getElementById('extra').checked;
+
+            let typeText = "", bgText = "";
+            let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
+
+            if (!window.isNSFW) {
+                if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
+                if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
+                if(typeVal == "65") typeText = "Full Body ($65) [PROMO]";
+                if(bgVal == "10") bgText = "Simple (gradient colors)";
+                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
+                if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; 
+            } else {
+                if(typeVal == "35") typeText = "NSFW Headshot ($35) [PROMO]";
+                if(typeVal == "55") typeText = "NSFW Half Body ($55) [PROMO]";
+                if(typeVal == "85") typeText = "NSFW Full Body ($85) [PROMO]";
+                if(bgVal == "10") bgText = "Simple (gradient colors)";
+                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
+                if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
+            }
+
+            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
+            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
+        }
+
+        window.openOrderModal = function() {
+            const typeSelect = document.getElementById('type');
+            const bgSelect = document.getElementById('bg');
+            const extraCheck = document.getElementById('extra');
+            const totalText = document.getElementById('total').innerText;
+            document.getElementById('modal-type').innerText = typeSelect.options[typeSelect.selectedIndex].text;
+            document.getElementById('modal-bg').innerText = bgSelect.options[bgSelect.selectedIndex].text;
+            document.getElementById('modal-extra').innerText = extraCheck.checked ? "Yes" : "No";
+            document.getElementById('modal-total').innerText = totalText;
+            document.getElementById('order-summary-modal').classList.remove('hidden');
+        }
+        window.closeOrderModal = function() { document.getElementById('order-summary-modal').classList.add('hidden'); }
+        
+        window.proceedToForm = goToForm; 
+
+        window.proceedToChat = function() {
+            const email = document.getElementById('order-email').value;
+            if (!email) { alert("Please enter your email so I can notify you about your order status."); return; }
+            const typeText = document.getElementById('modal-type').innerText;
+            const bgText = document.getElementById('modal-bg').innerText;
+            const extraText = document.getElementById('modal-extra').innerText;
+            const totalText = document.getElementById('modal-total').innerText;
+            const initialMessage = `Hi Skai! I'd like to discuss a commission request:\n- Type: ${typeText}\n- Background: ${bgText}\n- Extra Char: ${extraText}\n- Estimate: ${totalText}\n\nMy contact email is: ${email}`;
+            window.clientEmailForNotify = email;
+            closeOrderModal();
+            document.getElementById('chat-window').classList.remove('hidden');
+            window.sendMessage(initialMessage);
+        }
+    </script>
+</body>
+</html>
