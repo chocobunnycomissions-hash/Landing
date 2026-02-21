@@ -14,7 +14,6 @@
     
     <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
     <script type="module">
-        // Importamos solo lo necesario (Sin Storage esta vez)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
@@ -33,14 +32,25 @@
         const ADMIN_UID = "SLhx18aGHjRBENchfwcJB8pOITt2"; 
         const NOTIFICATION_WEBHOOK = "https://script.google.com/macros/s/AKfycby6O8VYRqqFsQC85vdX3OdPFRItMazgvP7GCPmsDT2ManqKk7leiuazzIUXRoy8noSa/exec";
 
-        // Inicializar
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
-        // const storage ya no es necesario con este método
 
         let currentUser = null;
         let currentChatId = null;
+
+        // --- ESTADO GLOBAL DE LA GALERÍA ---
+        // Imágenes por defecto (para que el botón Show More siempre se vea)
+        window.galleryItems = [
+            { id: 'static1', type: 'static', sfwUrl: 'assets/art1.jpg', nsfwUrl: 'assets/art1-nsfw.jpg', title: 'Commission Example 1' },
+            { id: 'static2', type: 'static', sfwUrl: 'assets/art2.jpg', nsfwUrl: 'assets/art2-nsfw.jpg', title: 'Commission Example 2' },
+            { id: 'static3', type: 'static', sfwUrl: 'assets/art3.jpg', nsfwUrl: 'assets/art3-nsfw.jpg', title: 'Commission Example 3' },
+            { id: 'static4', type: 'static', sfwUrl: 'assets/headshot.jpg', nsfwUrl: 'assets/HeadshoT_NSFW.png', title: 'Headshot Style' },
+            { id: 'static5', type: 'static', sfwUrl: 'assets/halfbody.jpg', nsfwUrl: 'assets/Halfbody.png', title: 'Halfbody Style' },
+            { id: 'static6', type: 'static', sfwUrl: 'assets/fullbody.jpg', nsfwUrl: 'assets/FullBody_NSFW.png', title: 'Fullbody Style' }
+        ];
+        window.firebaseItems = [];
+        window.portfolioItemsToShow = 3; 
 
         // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
@@ -73,52 +83,127 @@
             }
         });
 
-        // --- CARGA DINÁMICA DE PORTAFOLIO ---
+        // --- CARGA DINÁMICA DE PORTAFOLIO (FIREBASE) ---
         function setupPortfolioListener() {
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
                 const items = [];
                 snapshot.forEach((doc) => {
-                    items.push({ id: doc.id, ...doc.data() });
+                    items.push({ id: doc.id, type: 'dynamic', ...doc.data() });
                 });
-                window.portfolioData = items;
                 
+                // Actualizar array de firebase y volver a renderizar todo
+                window.firebaseItems = items;
                 if (typeof window.renderPortfolio === 'function') {
                     window.renderPortfolio();
                 }
 
                 if (currentUser && currentUser.uid === ADMIN_UID) {
-                    renderAdminPortfolioList(items);
+                    renderAdminPortfolioList(items); // Admin solo ve las subidas dinámicas
                 }
             });
         }
         setupPortfolioListener();
 
-        function renderPortfolio() {
+        // --- MOTOR DE RENDERIZADO DE GALERÍA (Maneja el Show More) ---
+        window.renderPortfolio = function() {
             const grid = document.getElementById('portfolio-grid');
-            const existingDynamic = document.querySelectorAll('.dynamic-item');
-            existingDynamic.forEach(e => e.remove());
+            grid.innerHTML = ''; // Limpiamos la cuadrícula
+            
+            // Juntamos las imágenes subidas por Firebase (primero) + Las estáticas
+            const allData = [...window.firebaseItems, ...window.galleryItems];
+            
+            // Filtramos SFW/NSFW
+            const filteredData = allData.filter(item => {
+                if (item.type === 'dynamic') {
+                    // Si es subida por Firebase, filtramos según la variable isNSFW
+                    return typeof isNSFW !== 'undefined' && isNSFW ? true : !item.nsfw;
+                }
+                return true; // Las estáticas siempre pasan, cambian su URL internamente
+            });
+            
+            // Tomamos solo la cantidad permitida (Show More logic)
+            const itemsToRender = filteredData.slice(0, window.portfolioItemsToShow);
 
-            const data = window.portfolioData || [];
-
-            data.forEach((item) => {
-                // Filtro NSFW
-                if (!isNSFW && item.nsfw) return; 
-
+            itemsToRender.forEach((item) => {
                 const div = document.createElement('div');
-                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group dynamic-item";
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group chat-anim";
                 
-                if(item.nsfw) div.classList.add("border-2", "border-red-500");
+                let currentImgUrl = '';
+                let isItemNsfw = false;
+
+                if (item.type === 'dynamic') {
+                    currentImgUrl = item.imageUrl;
+                    isItemNsfw = item.nsfw;
+                } else {
+                    currentImgUrl = isNSFW ? item.nsfwUrl : item.sfwUrl;
+                    isItemNsfw = isNSFW; 
+                }
+
+                if(isItemNsfw) div.classList.add("border-2", "border-red-500");
 
                 div.innerHTML = `
                     <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
-                        <span class="text-white font-bold text-lg text-center mb-1">${item.title}</span>
-                        ${item.nsfw ? '<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full font-bold">NSFW</span>' : ''}
+                        <span class="text-white font-bold text-xl text-center mb-2 drop-shadow-md">${item.title}</span>
+                        ${isItemNsfw ? '<span class="bg-red-600 text-white text-xs px-3 py-1 rounded-full font-bold shadow-sm uppercase tracking-wider">NSFW Content</span>' : '<span class="bg-white/20 text-white border-2 border-white px-4 py-1 rounded-full text-sm font-bold backdrop-blur-sm">View Detail</span>'}
                     </div>
-                    <img src="${item.imageUrl}" class="w-full h-full object-cover transition-opacity duration-500">
+                    <img src="${currentImgUrl}" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110">
                 `;
-                // Insertar al principio
-                grid.insertBefore(div, grid.firstChild); 
+                grid.appendChild(div); 
+            });
+
+            // LÓGICA DEL BOTÓN SHOW MORE
+            const btnContainer = document.getElementById('show-more-container');
+            if (filteredData.length > window.portfolioItemsToShow) {
+                btnContainer.classList.remove('hidden');
+            } else {
+                btnContainer.classList.add('hidden');
+            }
+        }
+
+        window.loadMorePortfolio = function() {
+            window.portfolioItemsToShow += 3; // Carga 3 imágenes más cada vez que clickeas
+            window.renderPortfolio();
+        }
+
+        // --- COMPRESOR DE IMÁGENES CLIENT-SIDE (Magia para saltar el límite de 1MB) ---
+        function compressImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        const MAX_SIZE = 1600; // Resolución máxima
+
+                        if (width > height) {
+                            if (width > MAX_SIZE) {
+                                height = Math.round(height * (MAX_SIZE / width));
+                                width = MAX_SIZE;
+                            }
+                        } else {
+                            if (height > MAX_SIZE) {
+                                width = Math.round(width * (MAX_SIZE / height));
+                                height = MAX_SIZE;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // Convertir a WebP (soporta transparencia y pesa poquísimo)
+                        const dataUrl = canvas.toDataURL('image/webp', 0.85); 
+                        resolve(dataUrl);
+                    };
+                    img.onerror = error => reject(error);
+                };
+                reader.onerror = error => reject(error);
             });
         }
 
@@ -136,7 +221,6 @@
             }
         };
 
-        // --- FUNCIÓN DE SUBIDA DE ARTE (BASE64 - MÉTODO INFALIBLE) ---
         window.uploadArt = async () => {
             if (currentUser.uid !== ADMIN_UID) return; 
             
@@ -151,54 +235,39 @@
                 return;
             }
 
-            // Validación de tamaño (Firestore tiene límite de 1MB por documento)
-            if (file.size > 800000) { // ~800KB
-                alert("⚠️ La imagen es muy pesada (>800KB). Por favor comprímela un poco antes de subirla para que la base de datos la acepte.");
-                return;
-            }
-
-            status.innerText = "Procesando imagen...";
+            status.innerText = "Comprimiendo y optimizando imagen (0 límite de peso)...";
             status.className = "text-blue-500 text-xs font-bold mt-2 text-center";
 
-            // Convertir imagen a Base64
-            const reader = new FileReader();
-            
-            reader.onload = async function(e) {
-                const base64String = e.target.result;
+            try {
+                const compressedBase64 = await compressImage(file);
                 
-                try {
-                    status.innerText = "Guardando en base de datos...";
-                    
-                    await addDoc(collection(db, "portfolio"), {
-                        title: title || "Sin título",
-                        imageUrl: base64String, // Guardamos la imagen directa
-                        nsfw: isNsfw,
-                        createdAt: serverTimestamp()
-                    });
-                    
-                    status.innerText = "¡Publicado con éxito!";
-                    status.className = "text-green-500 text-xs font-bold mt-2 text-center";
-                    
-                    // Limpiar formulario
-                    fileInput.value = "";
-                    document.getElementById('art-title').value = "";
-                    document.getElementById('art-nsfw').checked = false;
-                    
-                    setTimeout(() => status.innerText = "", 3000);
-
-                } catch (err) {
-                    console.error(err);
-                    status.innerText = "Error al guardar: " + err.message;
-                    status.className = "text-red-500 text-xs font-bold mt-2 text-center";
+                if(compressedBase64.length > 1048400) {
+                    throw new Error("La imagen sigue siendo muy grande tras comprimir. Intenta recortarla.");
                 }
-            };
 
-            reader.onerror = function(error) {
-                console.error("Error leyendo archivo:", error);
-                status.innerText = "Error leyendo el archivo";
-            };
+                status.innerText = "Guardando en la galería...";
+                
+                await addDoc(collection(db, "portfolio"), {
+                    title: title || "Sin título",
+                    imageUrl: compressedBase64,
+                    nsfw: isNsfw,
+                    createdAt: serverTimestamp()
+                });
+                
+                status.innerText = "¡Arte publicado con éxito!";
+                status.className = "text-green-500 text-xs font-bold mt-2 text-center";
+                
+                fileInput.value = "";
+                document.getElementById('art-title').value = "";
+                document.getElementById('art-nsfw').checked = false;
+                
+                setTimeout(() => status.innerText = "", 4000);
 
-            reader.readAsDataURL(file); // Inicia la lectura
+            } catch (err) {
+                console.error(err);
+                status.innerText = "Error: " + err.message;
+                status.className = "text-red-500 text-xs font-bold mt-2 text-center";
+            }
         };
 
         function renderAdminPortfolioList(items) {
@@ -227,10 +296,7 @@
 
         window.deleteArt = async (docId) => {
             if(!confirm("¿Seguro que quieres borrar esta imagen de la galería?")) return;
-            try {
-                await deleteDoc(doc(db, "portfolio", docId));
-                // No necesitamos borrar de Storage porque la imagen vive en el documento
-            } catch(e) { alert("Error al borrar: " + e.message); }
+            try { await deleteDoc(doc(db, "portfolio", docId)); } catch(e) { alert("Error al borrar: " + e.message); }
         }
 
         function initAdminPanel() {
@@ -250,8 +316,6 @@
                     list.appendChild(div);
                 });
             });
-            // Cargar lista inicial
-            if(window.portfolioData) renderAdminPortfolioList(window.portfolioData);
         }
 
         window.loadAdminChat = (id, name) => {
@@ -370,7 +434,7 @@
 
     <style>
         :root {
-            /* TUS COLORES ORIGINALES */
+            /* COLORES ORIGINALES */
             --text-main: #5D5D5D; --text-inverse: #FFFFFF; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
             --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
             --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
@@ -394,8 +458,8 @@
         #age-modal, #order-summary-modal, #admin-login-modal { backdrop-filter: blur(8px); }
         #mobile-menu { transition: max-height 0.3s ease-in-out; max-height: 0; overflow: hidden; }
         #mobile-menu.open { max-height: 300px; }
-        .chat-anim { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        @keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .chat-anim { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes popIn { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
         /* Scrollbars */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
@@ -455,7 +519,6 @@
     <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
-                <!-- LOGO DESDE ASSETS -->
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
                     <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
                 </span>
@@ -498,29 +561,21 @@
         </div>
     </section>
 
-    <!-- Quick Portfolio (Grid Dinámico) -->
-    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto">
+    <!-- Quick Portfolio (¡Totalmente Dinámico ahora!) -->
+    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto min-h-[600px]">
         <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
+        
+        <!-- Aquí el JavaScript inyectará TODAS las imágenes (predeterminadas + firebase) -->
         <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <!-- ITEMS DE FIREBASE Y ESTÁTICOS SE CARGARÁN AQUÍ -->
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                <div class="absolute inset-0 bg-[var(--color-secondary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img1" src="assets/wakeup_rat.png" alt="Art 1" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-primary)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img2" src="assets/Bunny_furry_kimono.jpg" alt="Art 2" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
-            <div class="static-portfolio-item rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group">
-                 <div class="absolute inset-0 bg-[var(--color-accent)]/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <span class="text-white font-bold text-xl">View Detail</span>
-                </div>
-                <img id="img3" src="assets/Study_Bunny.jpg" alt="Art 3" class="w-full h-full object-cover transition-opacity duration-500">
-            </div>
+            <!-- Se llena dinámicamente -->
+        </div>
+
+        <!-- AQUÍ ESTÁ EL BOTÓN GIGANTE DE SHOW MORE -->
+        <div id="show-more-container" class="mt-16 flex justify-center hidden w-full">
+            <button onclick="loadMorePortfolio()" class="bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)] px-12 py-5 rounded-full font-bold shadow-2xl flex items-center justify-center gap-3 hover:-translate-y-2 transition-all duration-300 text-xl border-4 border-white/50">
+                <i class="fas fa-plus-circle text-3xl"></i>
+                Show More Artwork
+            </button>
         </div>
     </section>
 
@@ -536,7 +591,6 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
                     <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                         <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
@@ -554,7 +608,6 @@
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
                     <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
                     <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                          <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4">Half Body</h3>
@@ -571,7 +624,6 @@
 
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
                     <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <!-- RUTA ACTUALIZADA A LA CARPETA ASSETS -->
                         <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4">Full Body</h3>
@@ -597,7 +649,6 @@
                 <div>
                     <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
                     <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
-                        <!-- OPCIONES ACTUALIZADAS CON LA ETIQUETA [PROMO] -->
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
@@ -654,10 +705,8 @@
         <div class="flex-1 p-0 flex relative">
             <!-- CHAT TAB -->
             <div id="admin-chat-section" class="flex-1 flex flex-col">
-                <!-- Chat List Sidebar -->
                 <div class="flex h-full">
                     <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
-                    <!-- Chat Area -->
                     <div class="flex-1 flex flex-col">
                         <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
                         <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
@@ -690,6 +739,7 @@
                     <div class="mb-6">
                         <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Image File (PNG/JPG)</label>
                         <input type="file" id="art-file" accept="image/*" class="w-full border-2 border-gray-200 p-3 rounded-lg">
+                        <p class="text-xs text-gray-400 mt-2"><i class="fas fa-magic"></i> ¡Cualquier tamaño funciona! El sistema lo comprime automáticamente (adiós error de 1MB).</p>
                     </div>
                     <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-4 rounded-xl font-bold hover:bg-green-600 transition shadow-lg">Upload to Portfolio</button>
                     <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
@@ -717,7 +767,6 @@
     </div>
 
     <script>
-        // LOGICA DE SCRIPT: Formulario, Toggle SFW/NSFW y Calculadora
         let isNSFW = false;
 
         function toggleMenu() { document.getElementById('mobile-menu').classList.toggle('open'); }
@@ -731,11 +780,6 @@
             const favicon = document.getElementById('dynamic-favicon');
             const faviconImg = document.getElementById('dynamic-favicon-img');
             
-            // Re-renderizamos el portafolio con el nuevo filtro
-            if (typeof window.renderPortfolio === 'function') {
-                window.renderPortfolio();
-            }
-
             if (nsfw) {
                 body.classList.add('nsfw-mode');
                 favicon.href = "assets/logo_white.svg"; 
@@ -749,13 +793,8 @@
                 document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
                 document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
 
-                document.getElementById('img1').src = "assets/art1-nsfw.jpg";
-                document.getElementById('img2').src = "assets/art2-nsfw.jpg";
-                document.getElementById('img3').src = "assets/art3-nsfw.jpg";
-                
-                // RUTAS NSFW ACTUALIZADAS CON TUS NOMBRES EXACTOS
-                document.getElementById('ex-headshot').src = "assets/headshoT_NSFW.png";
-                document.getElementById('ex-halfbody').src = "assets/Halfbody_NSFW.png";
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
+                document.getElementById('ex-halfbody').src = "assets/Halfbody.png";
                 document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
                 
                 document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
@@ -777,12 +816,7 @@
                 document.getElementById('price-headshot').innerHTML = '<span class="text-gray-400 line-through text-xl block">$35<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25<\/span>';
                 document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$60<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$45<\/span>';
                 document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$90<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65<\/span>';
-
-                document.getElementById('img1').src = "assets/art1.jpg";
-                document.getElementById('img2').src = "assets/art2.jpg";
-                document.getElementById('img3').src = "assets/art3.jpg";
                 
-                // RUTAS SFW (Mantenemos las que tenías por defecto)
                 document.getElementById('ex-headshot').src = "assets/headshot.jpg";
                 document.getElementById('ex-halfbody').src = "assets/halfbody.jpg";
                 document.getElementById('ex-fullbody').src = "assets/fullbody.jpg";
@@ -793,6 +827,12 @@
                 document.getElementById('opt-half').value = 45;
                 document.getElementById('opt-full').innerText = "Full Body ($65) [PROMO]";
                 document.getElementById('opt-full').value = 65;
+            }
+
+            // Al cambiar el modo, volvemos a renderizar la galería entera para que se aplique el filtro
+            window.portfolioItemsToShow = 3;
+            if (typeof window.renderPortfolio === 'function') {
+                window.renderPortfolio();
             }
             calculate();
         }
@@ -840,7 +880,6 @@
             if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
         }
 
-        // --- FUNCIONES DEL NUEVO MODAL DE ORDEN ---
         window.openOrderModal = function() {
             const typeSelect = document.getElementById('type');
             const bgSelect = document.getElementById('bg');
@@ -872,8 +911,3 @@
     </script>
 </body>
 </html>
-
-
-
-
-
