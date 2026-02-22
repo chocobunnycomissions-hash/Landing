@@ -44,7 +44,7 @@
         
         // Listas de datos unificadas
         window.firebaseItems = [];
-        window.galleryItems = []; // Aquí puedes poner tus imágenes estáticas después
+        window.galleryItems = []; 
 
         // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
@@ -86,12 +86,8 @@
 
                 snapshot.forEach((doc) => {
                     const data = doc.data();
-                    // Importante: Le añadimos type: 'dynamic' para que el filtro nuevo funcione
                     const item = { id: doc.id, type: 'dynamic', ...data };
-                    
-                    // Asegurar que nsfw sea booleano
                     item.nsfw = item.nsfw === true || item.nsfw === "true";
-                    
                     allItemsForAdmin.push(item);
                     window.firebaseItems.push(item);
                 });
@@ -107,7 +103,7 @@
         }
         setupPortfolioListener();
 
-        // --- MOTOR DE RENDERIZADO DE GALERÍA (NUEVA LÓGICA DE FILTRADO) ---
+        // --- MOTOR DE RENDERIZADO DE GALERÍA ---
         window.renderPortfolio = function() {
             const grid = document.getElementById('portfolio-grid');
             if (!grid) return;
@@ -116,19 +112,15 @@
             
             const allData = [...window.firebaseItems, ...window.galleryItems];
             
-            // ✅ FILTRO CORRECTO: Mostrar solo imágenes que coincidan con el modo actual
             const filteredData = allData.filter(item => {
                 if (item.type === 'dynamic') {
-                    // Si estamos en NSFW, mostrar solo NSFW
-                    // Si estamos en SFW, mostrar solo SFW
                     return window.isNSFW ? item.nsfw : !item.nsfw;
                 }
-                return true; // Las estáticas se manejan con su lógica propia
+                return true; 
             });
             
             const itemsToRender = filteredData.slice(0, window.portfolioItemsToShow);
 
-            // Mensaje si no hay items
             const noItemsMsg = document.getElementById('no-items-message');
             if (filteredData.length === 0) {
                 noItemsMsg.classList.remove('hidden');
@@ -138,7 +130,7 @@
 
             itemsToRender.forEach((item) => {
                 const div = document.createElement('div');
-                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group chat-anim";
+                div.className = "rounded-xl overflow-hidden shadow-lg aspect-[4/5] bg-gray-100 flex items-center justify-center relative group chat-anim border-2 border-transparent";
                 
                 let currentImgUrl = '';
                 let isItemNsfw = false;
@@ -151,7 +143,7 @@
                     isItemNsfw = window.isNSFW; 
                 }
 
-                if(isItemNsfw) div.classList.add("border-2", "border-red-500");
+                if(isItemNsfw) div.classList.add("!border-red-500");
 
                 div.innerHTML = `
                     <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
@@ -449,21 +441,51 @@
 
     <style>
         :root {
-            --text-main: #5D5D5D; --text-inverse: #FFFFFF; --bg-body: #FFFAFB; --bg-card: #FFFFFF;
+            /* Colores de texto ajustados para verse bien sobre el degradado global */
+            --text-main: #333333; 
+            --text-inverse: #FFFFFF; 
+            --bg-card: #FFFFFF;
+            --glass-bg: rgba(255, 255, 255, 0.4); /* Fondo cristal SFW */
+            
             --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
             --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
             --color-accent: #B9FBC0; --color-accent-dark: #98FB98;
             --hero-gradient-start: var(--color-primary); --hero-gradient-end: var(--color-secondary);
         }
         body.nsfw-mode {
-            --text-main: #E0E0E0; --text-inverse: #000000; --bg-body: #0a0a0a; --bg-card: #141414;
+            --text-main: #E0E0E0; 
+            --text-inverse: #000000; 
+            --bg-card: #141414;
+            --glass-bg: rgba(0, 0, 0, 0.6); /* Fondo cristal NSFW */
+            
             --color-primary: #8B0000; --color-primary-dark: #FF0000;
             --color-secondary: #00008B; --color-secondary-dark: #1E90FF;
             --color-accent: #C62828; --color-accent-dark: #B71C1C;
             --hero-gradient-start: #2b0505; --hero-gradient-end: #020a24;
         }
-        body { background-color: var(--bg-body); color: var(--text-main); font-family: 'Segoe UI', sans-serif; transition: background 0.5s ease, color 0.5s ease; }
-        .hero-gradient { background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%); transition: background 0.5s ease; }
+        
+        /* 1. EL DEGRADADO AHORA ES GLOBAL (FONDO DE TODA LA PÁGINA) */
+        body { 
+            background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%);
+            background-attachment: fixed; /* Esto hace que el degradado no se mueva al hacer scroll */
+            color: var(--text-main); 
+            font-family: 'Segoe UI', sans-serif; 
+            min-height: 100vh;
+        }
+        
+        /* 2. LA CABECERA AHORA USA UN BANNER DE IMAGEN */
+        #hero-section {
+            /* Pon aquí el nombre de la imagen de tu banner SFW */
+            background-image: url('assets/Banner_SFW.png'); 
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+        body.nsfw-mode #hero-section {
+            /* Pon aquí el nombre de la imagen de tu banner NSFW */
+            background-image: url('assets/Banner_NSFW.png'); 
+        }
+
         .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: 0.3s ease; }
         .card:hover { transform: translateY(-5px); }
         .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s ease; }
@@ -475,17 +497,18 @@
         .chat-anim { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         @keyframes popIn { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
         ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.2); border-radius: 10px; }
     </style>
 </head>
 <body class="antialiased relative">
 
     <!-- LOGIN ADMIN MODAL -->
     <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
+        <!-- ... (código del modal admin se mantiene igual) ... -->
         <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
             <h2 class="text-2xl font-bold mb-4 text-gray-700">Admin Access</h2>
-            <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3">
-            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4">
+            <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3 text-black">
+            <input type="password" id="admin-pass" placeholder="Password" class="w-full border p-3 rounded mb-4 text-black">
             <button id="login-btn" onclick="loginAdmin()" class="w-full bg-blue-500 text-white py-3 rounded font-bold hover:bg-blue-600">Enter</button>
             <a href="index.html" class="block mt-4 text-xs text-gray-400 hover:underline">Back to Site</a>
         </div>
@@ -508,32 +531,30 @@
     <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
         <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
             <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
-            
             <h3 class="text-3xl font-bold mb-4 text-center text-[var(--color-secondary-dark)]">Review Order</h3>
-            
-            <div class="bg-gray-50 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100">
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Type:</span><span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span></div>
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Bg:</span><span id="modal-bg">Simple</span></div>
-                <div class="flex justify-between"><span class="font-bold text-gray-600">Extra:</span><span id="modal-extra">No</span></div>
-                <div class="border-t border-gray-200 mt-2 pt-2 flex justify-between text-xl font-black"><span>Total:</span><span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span></div>
+            <div class="bg-gray-50 dark:bg-gray-800 p-4 rounded-xl mb-6 text-sm space-y-2 border border-gray-100 dark:border-gray-700">
+                <div class="flex justify-between"><span class="font-bold opacity-70">Type:</span><span id="modal-type" class="text-[var(--color-primary-dark)] font-bold">Headshot</span></div>
+                <div class="flex justify-between"><span class="font-bold opacity-70">Bg:</span><span id="modal-bg">Simple</span></div>
+                <div class="flex justify-between"><span class="font-bold opacity-70">Extra:</span><span id="modal-extra">No</span></div>
+                <div class="border-t border-gray-200 dark:border-gray-600 mt-2 pt-2 flex justify-between text-xl font-black"><span>Total:</span><span id="modal-total" class="text-[var(--color-accent-dark)]">$25</span></div>
             </div>
             <div class="mb-6">
-                <label class="block font-bold text-sm mb-2 text-gray-600">Your Email <span class="text-red-400">*</span></label>
-                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3">
+                <label class="block font-bold text-sm mb-2 opacity-80">Your Email <span class="text-red-400">*</span></label>
+                <input type="email" id="order-email" placeholder="name@example.com" class="w-full border-2 border-gray-200 rounded-lg p-3 text-black">
             </div>
             <div class="grid grid-cols-2 gap-4">
-                <button onclick="proceedToForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1"><i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i><span class="text-sm">Google Form</span></button>
+                <button onclick="proceedToForm()" class="bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-700 dark:text-gray-200 py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1"><i class="fas fa-file-alt text-xl text-[var(--color-secondary)]"></i><span class="text-sm">Google Form</span></button>
                 <button onclick="proceedToChat()" class="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white py-3 rounded-xl font-bold flex flex-col items-center justify-center gap-1 shadow-lg"><i class="fas fa-comments text-xl"></i><span class="text-sm">Discuss in Chat</span></button>
             </div>
         </div>
     </div>
 
-    <!-- Navigation -->
-    <nav class="p-6 bg-[var(--bg-card)]/90 backdrop-blur-md shadow-sm sticky top-0 z-50 transition-colors duration-500">
+    <!-- Navigation (Efecto Cristal aplicado) -->
+    <nav class="p-6 bg-[var(--bg-card)]/80 backdrop-blur-md shadow-sm sticky top-0 z-50 border-b border-white/20">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
-                    <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain mix-blend-screen" id="dynamic-favicon-img">
+                    <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain" id="dynamic-favicon-img">
                 </span>
                 <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
                 <span class="bg-gradient-to-r from-[var(--color-primary-dark)] to-[var(--color-secondary-dark)] bg-clip-text text-transparent transition-all duration-500">CHOCOBUNNY</span>
@@ -541,7 +562,7 @@
             
             <button class="md:hidden text-[var(--text-main)]" onclick="toggleMenu()"><i class="fas fa-bars text-2xl"></i></button>
 
-            <div class="hidden md:flex items-center space-x-6 font-semibold text-gray-500">
+            <div class="hidden md:flex items-center space-x-6 font-semibold opacity-80">
                 <a href="#portfolio" class="hover:text-[var(--color-primary-dark)] transition-colors">Portfolio</a>
                 <a href="#prices" class="hover:text-[var(--color-primary-dark)] transition-colors">Prices</a>
                 <a href="#tos" class="hover:text-[var(--color-primary-dark)] transition-colors">TOS</a>
@@ -551,23 +572,31 @@
                 <a href="#contact" class="btn-primary px-6 py-2 rounded-full font-bold shadow-sm text-sm">Contact Me</a>
             </div>
         </div>
-        <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-gray-500 text-center border-t border-gray-100 mt-4">
+        <div id="mobile-menu" class="md:hidden flex flex-col space-y-4 pt-4 font-semibold text-center border-t border-gray-200/20 mt-4 opacity-80">
             <a href="#portfolio">Portfolio</a><a href="#prices">Prices</a><button onclick="openModal()" class="text-red-400 font-bold">NSFW Mode</button>
         </div>
     </nav>
 
-    <!-- Hero Section -->
-    <section class="hero-gradient py-24 px-6 text-center relative overflow-hidden">
+    <!-- Hero Section con BANNER -->
+    <!-- NOTA: Si tu imagen Banner ya tiene el texto dibujado adentro, 
+         puedes borrar el <h1> y el <p> de aquí abajo para que solo se vea la imagen -->
+    <section id="hero-section" class="py-24 px-6 text-center relative overflow-hidden rounded-b-[3rem] shadow-2xl mx-4 mt-4 border-2 border-white/20">
+        
+        <!-- Esta capa negra transparente asegura que las letras blancas siempre se lean, sin importar la imagen que pongas de fondo -->
+        <div class="absolute inset-0 bg-black/40 backdrop-blur-sm pointer-events-none"></div>
+
         <div class="max-w-4xl mx-auto relative z-10">
             <div class="inline-block bg-red-500 text-white border-2 border-white rounded-full px-6 py-2 mb-8 font-bold shadow-lg animate-bounce cursor-default">
                 <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
             </div>
 
-            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-md transition-all">Atmospheric & Painterly Furry Art</h1>
-            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-sm transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
+            <!-- TEXTOS DEL BANNER -->
+            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-lg transition-all">Atmospheric & Painterly Furry Art</h1>
+            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-md transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
+            
             <div class="flex flex-wrap justify-center gap-4">
                 <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Sale Prices</a>
-                <a href="https://trello.com" target="_blank" class="bg-white/10 backdrop-blur-sm border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center">
+                <a href="https://trello.com" target="_blank" class="bg-white/20 backdrop-blur-md border-2 border-white px-8 py-4 rounded-full text-lg font-bold text-white hover:bg-white hover:text-black transition-all flex items-center shadow-lg">
                     <i class="fab fa-trello mr-2"></i> Check Queue
                 </a>
             </div>
@@ -576,16 +605,14 @@
 
     <!-- Quick Portfolio -->
     <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto min-h-[600px]">
-        <h2 class="text-4xl font-bold text-center mb-12 section-title">Latest Works</h2>
+        <h2 class="text-4xl font-bold text-center mb-12 drop-shadow-sm">Latest Works</h2>
         
-        <p id="no-items-message" class="text-center text-gray-400 font-bold hidden py-10">There are no artworks in this category yet. Stay tuned!</p>
+        <p id="no-items-message" class="text-center font-bold hidden py-10 opacity-70">There are no artworks in this category yet. Stay tuned!</p>
 
-        <!-- EL ÚNICO CONTENEDOR NECESARIO -->
         <div id="portfolio-container" class="w-full">
             <div id="portfolio-grid" class="grid grid-cols-1 md:grid-cols-3 gap-8"></div>
         </div>
 
-        <!-- BOTÓN SHOW MORE -->
         <div id="show-more-container" class="mt-16 flex justify-center hidden w-full">
             <button onclick="loadMorePortfolio()" class="bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-dark)] px-12 py-5 rounded-full font-bold shadow-2xl flex items-center justify-center gap-3 hover:-translate-y-2 transition-all duration-300 text-xl border-4 border-white/50">
                 <i class="fas fa-plus-circle text-3xl"></i>
@@ -594,59 +621,59 @@
         </div>
     </section>
 
-    <!-- Pricing Section -->
-    <section id="prices" class="bg-[var(--color-primary)]/10 py-20 px-6 transition-colors duration-500">
+    <!-- Pricing Section (Con efecto cristal) -->
+    <section id="prices" class="py-20 px-6 transition-colors duration-500 border-y border-white/20" style="background-color: var(--glass-bg); backdrop-filter: blur(12px);">
         <div class="max-w-6xl mx-auto">
-            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] transition-colors">Commission Rates</h2>
-            <p id="price-subtitle" class="text-center mb-16 opacity-70">
+            <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] drop-shadow-md">Commission Rates</h2>
+            <p id="price-subtitle" class="text-center mb-16 font-bold opacity-80">
                 <span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE</span>
                 Special launch prices applied! (30% OFF)
             </p>
             
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-md text-center flex flex-col">
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-2xl text-center flex flex-col bg-[var(--bg-card)]">
                     <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
+                        <img id="ex-headshot" src="assets/HeadshoT_SFW.png" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-                    <h3 class="text-2xl font-bold mb-4">Headshot / Icon</h3>
+                    <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Headshot / Icon</h3>
                     <div id="price-headshot" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$35</span>
                         <span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
                         <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
                         <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
                         <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
                     </ul>
                 </div>
 
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col">
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-2xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col bg-[var(--bg-card)]">
                     <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
                     <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
+                         <img id="ex-halfbody" src="assets/Halfbody.png" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-                    <h3 class="text-2xl font-bold mb-4">Half Body</h3>
+                    <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Half Body</h3>
                     <div id="price-halfbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$60</span>
                         <span class="text-4xl font-black text-[var(--color-secondary)]">$45</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
                         <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
                         <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
                         <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
                     </ul>
                 </div>
 
-                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-md text-center flex flex-col">
+                <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-2xl text-center flex flex-col bg-[var(--bg-card)]">
                     <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
+                        <img id="ex-fullbody" src="assets/FullBody_SFW.png" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
-                    <h3 class="text-2xl font-bold mb-4">Full Body</h3>
+                    <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Full Body</h3>
                     <div id="price-fullbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$90</span>
                         <span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow">
+                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
                         <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
                         <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
                         <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
@@ -656,34 +683,35 @@
         </div>
     </section>
 
-    <!-- Calculator -->
+    <!-- Calculator (Con efecto cristal en el contenedor exterior) -->
     <section class="py-20 px-6 max-w-3xl mx-auto">
-        <div class="card p-10 rounded-3xl shadow-lg border border-[var(--color-secondary)]/30">
-            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)]">Estimate Your Project</h3>
-            <div class="space-y-6">
+        <div class="card p-10 rounded-3xl shadow-2xl border border-white/40 bg-[var(--bg-card)]/90 backdrop-blur-xl relative overflow-hidden">
+            
+            <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)] drop-shadow-sm">Estimate Your Project</h3>
+            <div class="space-y-6 relative z-10">
                 <div>
-                    <label class="block font-bold mb-2 opacity-80">Commission Type (Promo Prices)</label>
-                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10" onchange="calculate()">
+                    <label class="block font-bold mb-2 opacity-80 text-[var(--text-main)]">Commission Type (Promo Prices)</label>
+                    <select id="type" class="w-full p-3 rounded-xl border-2 border-[var(--color-secondary)]/20 focus:border-[var(--color-secondary)] outline-none bg-gray-50/10 text-[var(--text-main)] font-semibold" onchange="calculate()">
                         <option value="25" id="opt-head">Headshot ($25) [PROMO]</option>
                         <option value="45" id="opt-half" selected>Half Body ($45) [PROMO]</option>
                         <option value="65" id="opt-full">Full Body ($65) [PROMO]</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block font-bold mb-2 opacity-80">Background Complexity</label>
-                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10" onchange="calculate()">
+                    <label class="block font-bold mb-2 opacity-80 text-[var(--text-main)]">Background Complexity</label>
+                    <select id="bg" class="w-full p-3 rounded-xl border-2 border-[var(--color-accent)]/20 focus:border-[var(--color-accent)] outline-none bg-gray-50/10 text-[var(--text-main)] font-semibold" onchange="calculate()">
                         <option value="10">Simple (gradient colors) ($10)</option>
                         <option value="40">Complex (environment, settings, etc) ($40)</option>
                         <option value="50">Full Cinematic ($50)</option>
                     </select>
                 </div>
-                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl">
+                <div class="flex items-center gap-4 p-4 bg-[var(--color-primary)]/20 rounded-xl border border-[var(--color-primary)]/30">
                     <input type="checkbox" id="extra" class="w-6 h-6 accent-[var(--color-primary)]" onchange="calculate()">
-                    <label for="extra" class="font-bold opacity-80">Add Extra Character (+50%)</label>
+                    <label for="extra" class="font-bold opacity-80 text-[var(--text-main)]">Add Extra Character (+50%)</label>
                 </div>
                 
                 <div class="pt-8 border-t border-dashed border-gray-400/30">
-                    <div class="flex justify-between items-center text-3xl font-black mb-8">
+                    <div class="flex justify-between items-center text-3xl font-black mb-8 text-[var(--text-main)]">
                         <span class="opacity-80">Total Estimate:</span>
                         <span id="total" class="text-[var(--color-accent-dark)]">$55</span>
                     </div>
@@ -692,12 +720,12 @@
                          <button onclick="openOrderModal()" class="btn-primary flex-1 py-4 rounded-xl text-lg font-bold shadow-lg flex items-center justify-center gap-2 hover:-translate-y-1 transition-transform text-center cursor-pointer">
                             <i class="fas fa-clipboard-check"></i> Fill Order Form
                         </button>
-                        <a href="https://trello.com" target="_blank" class="border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
+                        <a href="https://trello.com" target="_blank" class="bg-white dark:bg-gray-800 border-2 border-[var(--color-secondary)] text-[var(--color-secondary)] hover:bg-[var(--color-secondary)] hover:text-white flex-1 py-4 rounded-xl text-lg font-bold shadow-sm flex items-center justify-center gap-2 transition-all text-center">
                             <i class="fab fa-trello"></i> Check Queue
                         </a>
                     </div>
                     
-                    <p class="text-center mt-6 text-sm opacity-70">
+                    <p class="text-center mt-6 text-sm opacity-80 font-medium">
                         Is this process too formal for you? Don't worry! <br>
                         <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
                     </p>
@@ -707,8 +735,9 @@
     </section>
 
     <!-- ADMIN PANEL -->
+    <!-- ... (El panel admin se mantiene exactamente igual para no romper funciones) ... -->
     <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
-        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4">
+        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4 text-black">
             <h3 class="font-bold text-lg text-gray-700">Admin Control</h3>
             <button onclick="switchAdminTab('chat')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-blue-50 font-bold">💬 Messages</button>
             <button onclick="switchAdminTab('portfolio')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-pink-50 font-bold">🖼️ Upload Art</button>
@@ -717,7 +746,7 @@
             </div>
         </div>
         
-        <div class="flex-1 p-0 flex relative">
+        <div class="flex-1 p-0 flex relative text-black">
             <div id="admin-chat-section" class="flex-1 flex flex-col">
                 <div class="flex h-full">
                     <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
@@ -764,17 +793,17 @@
     </div>
 
     <!-- CLIENT CHAT BUTTON & WINDOW -->
-    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg border-2 border-white cursor-pointer animate-bounce chat-anim">
+    <div id="chat-trigger-btn" onclick="toggleChat()" class="fixed bottom-6 right-6 z-50 bg-[var(--color-secondary)] text-white w-14 h-14 rounded-full flex items-center justify-center shadow-2xl border-2 border-white cursor-pointer animate-bounce chat-anim hover:scale-110 transition-transform">
         <i class="fas fa-comment-dots text-2xl"></i>
     </div>
-    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white rounded-2xl shadow-2xl z-50 hidden border border-gray-200 flex flex-col overflow-hidden h-96 chat-anim">
-        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center">
-            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()"><i class="fas fa-times"></i></button>
+    <div id="chat-window" class="fixed bottom-24 right-6 w-80 bg-white dark:bg-gray-800 rounded-2xl shadow-2xl z-50 hidden border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden h-96 chat-anim text-black">
+        <div class="bg-[var(--color-secondary)] p-4 text-white font-bold flex justify-between items-center shadow-md z-10">
+            <span><i class="fas fa-robot mr-2"></i>Skai Assist</span><button onclick="toggleChat()" class="hover:text-red-200"><i class="fas fa-times"></i></button>
         </div>
         <div id="chat-messages" class="flex-1 p-4 overflow-y-auto bg-gray-50 flex flex-col gap-2"></div>
         <div class="p-3 border-t bg-white flex gap-2">
-            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm">
-            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] text-white w-9 h-9 rounded-full flex items-center justify-center"><i class="fas fa-paper-plane text-xs"></i></button>
+            <input type="text" id="chat-input" placeholder="Type..." class="flex-1 border rounded-full px-4 text-sm bg-gray-50 focus:outline-none focus:border-[var(--color-secondary)] transition-colors">
+            <button onclick="sendMessage()" class="bg-[var(--color-secondary)] hover:bg-[var(--color-secondary-dark)] text-white w-9 h-9 rounded-full flex items-center justify-center transition-colors"><i class="fas fa-paper-plane text-xs"></i></button>
         </div>
     </div>
 
@@ -807,7 +836,7 @@
                 document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
                 document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
 
-                document.getElementById('ex-headshot').src = "assets/headshoT_NSFW.png";
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
                 document.getElementById('ex-halfbody').src = "assets/Halfbody_NSFW.png"; 
                 document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
                 
@@ -843,7 +872,6 @@
                 document.getElementById('opt-full').value = 65;
             }
 
-            // Al cambiar de modo, renderizamos la galería de nuevo con el filtro actualizado
             if (typeof window.renderPortfolio === 'function') {
                 window.renderPortfolio();
             }
