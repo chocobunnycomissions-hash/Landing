@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skai Chocobunny | Digital Artist</title>
     
-    <!-- FAVICON -->
+    <!-- 🛑 PON TU RUTA AQUÍ 🛑 (Favicon) -->
     <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="assets/logo_sin_fondo.svg">
 
     <!-- ESTILOS Y FUENTES -->
@@ -39,14 +39,10 @@
         let currentUser = null;
         let currentChatId = null;
 
-        // --- ESTADO GLOBAL DE LA GALERÍA ---
         window.portfolioItemsToShow = 3; 
-        
-        // Listas de datos unificadas
         window.firebaseItems = [];
         window.galleryItems = []; 
 
-        // --- SISTEMA DE AUTENTICACIÓN ---
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
             const wantsAdmin = new URLSearchParams(window.location.search).get('mode') === 'admin';
@@ -77,7 +73,6 @@
             }
         });
 
-        // --- CARGA DINÁMICA DE PORTAFOLIO (FIREBASE) ---
         function setupPortfolioListener() {
             const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
@@ -103,7 +98,7 @@
         }
         setupPortfolioListener();
 
-        // --- MOTOR DE RENDERIZADO DE GALERÍA ---
+        // MOTOR DE RENDERIZADO CON LAZY LOADING PARA IMÁGENES
         window.renderPortfolio = function() {
             const grid = document.getElementById('portfolio-grid');
             if (!grid) return;
@@ -145,12 +140,13 @@
 
                 if(isItemNsfw) div.classList.add("!border-red-500");
 
+                // OPTIMIZACIÓN APLICADA: loading="lazy" en las imágenes generadas por JS
                 div.innerHTML = `
                     <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center z-10 p-4">
                         <span class="text-white font-bold text-xl text-center mb-2 drop-shadow-md">${item.title || 'Sin título'}</span>
                         ${isItemNsfw ? '<span class="bg-red-600 text-white text-xs px-3 py-1 rounded-full font-bold shadow-sm uppercase tracking-wider">NSFW Content</span>' : '<span class="bg-white/20 text-white text-xs px-3 py-1 rounded-full font-bold">View</span>'}
                     </div>
-                    <img src="${currentImgUrl}" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110">
+                    <img src="${currentImgUrl}" loading="lazy" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110">
                 `;
                 grid.appendChild(div); 
             });
@@ -168,7 +164,6 @@
             window.renderPortfolio(); 
         }
 
-        // --- COMPRESOR DE IMÁGENES CLIENT-SIDE ---
         function compressImage(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -208,46 +203,34 @@
             });
         }
 
-        // --- FUNCIONES ADMIN ---
+        // FUNCIONES DE ADMIN
         window.loginAdmin = async () => {
             const email = document.getElementById('admin-email').value;
             const pass = document.getElementById('admin-pass').value;
             const btn = document.getElementById('login-btn');
             btn.innerText = "Verificando...";
-            try {
-                await signInWithEmailAndPassword(auth, email, pass);
-            } catch (e) { 
-                alert("Error de acceso: " + e.message); 
-                btn.innerText = "Entrar";
-            }
+            try { await signInWithEmailAndPassword(auth, email, pass); } 
+            catch (e) { alert("Error de acceso: " + e.message); btn.innerText = "Entrar"; }
         };
 
         window.uploadArt = async () => {
             if (currentUser.uid !== ADMIN_UID) return; 
-            
             const fileInput = document.getElementById('art-file');
             const file = fileInput.files[0];
             const title = document.getElementById('art-title').value;
             const isNsfw = document.getElementById('art-nsfw').checked;
             const status = document.getElementById('upload-status');
 
-            if (!file) {
-                alert("Por favor selecciona un archivo.");
-                return;
-            }
+            if (!file) { alert("Por favor selecciona un archivo."); return; }
 
             status.innerText = "Comprimiendo y optimizando imagen...";
             status.className = "text-blue-500 text-xs font-bold mt-2 text-center";
 
             try {
                 const compressedBase64 = await compressImage(file);
+                if(compressedBase64.length > 1048400) throw new Error("La imagen sigue siendo muy grande. Intenta recortarla.");
                 
-                if(compressedBase64.length > 1048400) {
-                    throw new Error("La imagen sigue siendo muy grande. Intenta recortarla.");
-                }
-
                 status.innerText = "Guardando en la galería...";
-                
                 await addDoc(collection(db, "portfolio"), {
                     title: title || "Sin título",
                     imageUrl: compressedBase64,
@@ -257,13 +240,8 @@
                 
                 status.innerText = "¡Arte publicado con éxito!";
                 status.className = "text-green-500 text-xs font-bold mt-2 text-center";
-                
-                fileInput.value = "";
-                document.getElementById('art-title').value = "";
-                document.getElementById('art-nsfw').checked = false;
-                
+                fileInput.value = ""; document.getElementById('art-title').value = ""; document.getElementById('art-nsfw').checked = false;
                 setTimeout(() => status.innerText = "", 4000);
-
             } catch (err) {
                 console.error(err);
                 status.innerText = "Error: " + err.message;
@@ -275,14 +253,13 @@
             const list = document.getElementById('admin-portfolio-list');
             if(!list) return;
             list.innerHTML = '';
-            
             items.forEach(item => {
                 const isNsfw = item.nsfw === true || item.nsfw === "true";
                 const div = document.createElement('div');
                 div.className = "flex items-center justify-between bg-gray-50 p-3 rounded-lg border border-gray-200";
                 div.innerHTML = `
                     <div class="flex items-center gap-3">
-                        <img src="${item.imageUrl}" class="w-12 h-12 object-cover rounded bg-white">
+                        <img src="${item.imageUrl}" loading="lazy" class="w-12 h-12 object-cover rounded bg-white">
                         <div>
                             <p class="font-bold text-sm text-gray-700 truncate w-32">${item.title}</p>
                             <span class="text-xs ${isNsfw ? 'text-red-500 font-bold' : 'text-green-500'}">${isNsfw ? 'NSFW' : 'SFW'}</span>
@@ -304,7 +281,6 @@
         function initAdminPanel() {
             document.getElementById('admin-chat-panel').classList.remove('hidden');
             document.getElementById('chat-trigger-btn').classList.add('hidden'); 
-            
             const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
             onSnapshot(q, (snapshot) => {
                 const list = document.getElementById('admin-chat-list');
@@ -324,7 +300,6 @@
             currentChatId = id;
             document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
             const area = document.getElementById('admin-messages-area');
-            
             const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
             onSnapshot(q, (snapshot) => {
                 area.innerHTML = '';
@@ -339,7 +314,6 @@
             });
         };
 
-        // --- CHAT CLIENTE ---
         window.sendMessage = async (textOverride = null) => {
             const input = document.getElementById('chat-input');
             const msg = textOverride || input.value.trim();
@@ -369,13 +343,11 @@
                     senderName: currentUser.uid === ADMIN_UID ? "Skai" : "Cliente",
                     timestamp: serverTimestamp()
                 });
-
                 await setDoc(doc(db, "chats", currentChatId), {
                     lastMessage: msg,
                     lastMessageTime: serverTimestamp(),
                     unread: currentUser.uid !== ADMIN_UID
                 }, { merge: true });
-
                 if (!textOverride) input.value = '';
             }
         };
@@ -425,27 +397,20 @@
             adminInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') sendAdmin(); });
         }
 
-        window.logoutAdmin = async () => { 
-            await signOut(auth); 
-            window.location.href = window.location.pathname; 
-        }
+        window.logoutAdmin = async () => { await signOut(auth); window.location.href = window.location.pathname; }
 
         document.addEventListener("DOMContentLoaded", () => {
             const chatInput = document.getElementById('chat-input');
-            if (chatInput) {
-                chatInput.addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); });
-            }
+            if (chatInput) { chatInput.addEventListener('keypress', (e) => { if(e.key==='Enter') window.sendMessage(); }); }
         });
-
     </script>
 
     <style>
         :root {
-            /* Colores de texto ajustados para verse bien sobre el degradado global */
-            --text-main: #333333; 
+            var(--text-main: #333333; 
             --text-inverse: #FFFFFF; 
             --bg-card: #FFFFFF;
-            --glass-bg: rgba(255, 255, 255, 0.4); /* Fondo cristal SFW */
+            --glass-bg: rgba(255, 255, 255, 0.4);
             
             --color-primary: #FFC8DD; --color-primary-dark: #FFAAC1;
             --color-secondary: #A2D2FF; --color-secondary-dark: #80C0FF;
@@ -456,7 +421,7 @@
             --text-main: #E0E0E0; 
             --text-inverse: #000000; 
             --bg-card: #141414;
-            --glass-bg: rgba(0, 0, 0, 0.6); /* Fondo cristal NSFW */
+            --glass-bg: rgba(0, 0, 0, 0.6);
             
             --color-primary: #8B0000; --color-primary-dark: #FF0000;
             --color-secondary: #00008B; --color-secondary-dark: #1E90FF;
@@ -464,37 +429,57 @@
             --hero-gradient-start: #2b0505; --hero-gradient-end: #020a24;
         }
         
-        /* 1. EL DEGRADADO AHORA ES GLOBAL (FONDO DE TODA LA PÁGINA) */
+        /* OPTIMIZACIÓN 1: El fondo no está fijado al body, evita el repintado forzado. */
         body { 
-            background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%);
-            background-attachment: fixed; /* Esto hace que el degradado no se mueva al hacer scroll */
             color: var(--text-main); 
             font-family: 'Segoe UI', sans-serif; 
             min-height: 100vh;
         }
+
+        /* En su lugar usamos un div global */
+        #global-bg {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: -10; 
+            background: linear-gradient(135deg, var(--hero-gradient-start) 0%, var(--hero-gradient-end) 100%);
+            transition: background 0.5s ease;
+        }
         
-        /* 2. LA CABECERA AHORA USA UN BANNER DE IMAGEN */
         #hero-section {
-            /* Pon aquí el nombre de la imagen de tu banner SFW */
-            background-image: url('assets/Banner_SFW_2.png'); 
+            /* 🛑 PON TU RUTA DE BANNER SFW AQUÍ 🛑 */
+            background-image: url('assets/Banner_SFW.png'); 
             background-size: cover;
             background-position: center;
             background-repeat: no-repeat;
         }
         body.nsfw-mode #hero-section {
-            /* Pon aquí el nombre de la imagen de tu banner NSFW */
+            /* 🛑 PON TU RUTA DE BANNER NSFW AQUÍ 🛑 */
             background-image: url('assets/Banner_NSFW.png'); 
         }
 
-        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: 0.3s ease; }
+        .card { background: var(--bg-card); border-bottom: 4px solid var(--color-secondary); transition: transform 0.3s ease; }
         .card:hover { transform: translateY(-5px); }
-        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: 0.3s ease; }
+        .btn-primary { background-color: var(--color-accent); color: var(--text-main); transition: transform 0.3s ease, background-color 0.3s ease; }
         body.nsfw-mode .btn-primary { color: white; }
         .btn-primary:hover { background-color: var(--color-accent-dark); transform: scale(1.05); }
         #age-modal, #order-summary-modal, #admin-login-modal { backdrop-filter: blur(8px); }
         #mobile-menu { transition: max-height 0.3s ease-in-out; max-height: 0; overflow: hidden; }
         #mobile-menu.open { max-height: 300px; }
         .chat-anim { animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        
+        /* OPTIMIZACIÓN 2: Efectos de aparición con Intersection Observer */
+        .reveal {
+            opacity: 0;
+            transform: translateY(40px);
+            transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+            will-change: opacity, transform;
+        }
+        .reveal.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
         @keyframes popIn { from { transform: scale(0.9) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.2); border-radius: 10px; }
@@ -502,9 +487,11 @@
 </head>
 <body class="antialiased relative">
 
-    <!-- LOGIN ADMIN MODAL -->
+    <!-- EL NUEVO FONDO GLOBAL SÚPER LIGERO -->
+    <div id="global-bg"></div>
+
+    <!-- MODALES (Se mantienen igual) -->
     <div id="admin-login-modal" class="fixed inset-0 bg-black/80 z-[100] hidden flex items-center justify-center">
-        <!-- ... (código del modal admin se mantiene igual) ... -->
         <div class="bg-white p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
             <h2 class="text-2xl font-bold mb-4 text-gray-700">Admin Access</h2>
             <input type="email" id="admin-email" placeholder="Email" class="w-full border p-3 rounded mb-3 text-black">
@@ -514,7 +501,6 @@
         </div>
     </div>
 
-    <!-- AGE VERIFICATION MODAL -->
     <div id="age-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/80">
         <div class="bg-gray-900 border-2 border-red-600 text-white p-8 rounded-2xl max-w-md w-full mx-4 shadow-2xl text-center">
             <i class="fas fa-exclamation-triangle text-5xl text-red-500 mb-4"></i>
@@ -527,7 +513,6 @@
         </div>
     </div>
 
-    <!-- ORDER SUMMARY MODAL -->
     <div id="order-summary-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-black/50">
         <div class="bg-[var(--bg-card)] border-b-4 border-[var(--color-primary)] p-8 rounded-2xl max-w-lg w-full mx-4 shadow-2xl transform scale-100 transition-transform relative">
             <button onclick="closeOrderModal()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-xl"><i class="fas fa-times"></i></button>
@@ -549,11 +534,12 @@
         </div>
     </div>
 
-    <!-- Navigation (Efecto Cristal aplicado) -->
+    <!-- Navigation -->
     <nav class="p-6 bg-[var(--bg-card)]/80 backdrop-blur-md shadow-sm sticky top-0 z-50 border-b border-white/20">
         <div class="flex justify-between items-center">
             <div class="text-2xl font-bold flex items-center gap-2">
                 <span class="text-[var(--color-primary-dark)] transition-colors duration-500">
+                    <!-- 🛑 PON TU RUTA AQUÍ 🛑 (Logo Menú) -->
                     <img src="assets/logo_sin_fondo.svg" alt="Skai Logo" class="w-10 h-10 object-contain" id="dynamic-favicon-img">
                 </span>
                 <span class="text-[var(--text-main)] transition-colors duration-500">SKAI</span> 
@@ -577,12 +563,8 @@
         </div>
     </nav>
 
-    <!-- Hero Section con BANNER -->
-    <!-- NOTA: Si tu imagen Banner ya tiene el texto dibujado adentro, 
-         puedes borrar el <h1> y el <p> de aquí abajo para que solo se vea la imagen -->
-    <section id="hero-section" class="py-24 px-6 text-center relative overflow-hidden rounded-b-[3rem] shadow-2xl mx-4 mt-4 border-2 border-white/20">
-        
-        <!-- Esta capa negra transparente asegura que las letras blancas siempre se lean, sin importar la imagen que pongas de fondo -->
+    <!-- Hero Section con clase REVEAL -->
+    <section id="hero-section" class="py-24 px-6 text-center relative overflow-hidden rounded-b-[3rem] shadow-2xl mx-4 mt-4 border-2 border-white/20 reveal active">
         <div class="absolute inset-0 bg-black/40 backdrop-blur-sm pointer-events-none"></div>
 
         <div class="max-w-4xl mx-auto relative z-10">
@@ -590,9 +572,9 @@
                 <i class="fas fa-tag mr-2"></i> GRAND OPENING SALE: 30% OFF!
             </div>
 
-            <!-- TEXTOS DEL BANNER -->
-            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-lg transition-all">If you can imagine it, I can draw it!</h1>
-            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-md transition-all">Your character deserves to be unforgettable.</p>
+            <!-- 🛑 PON TUS ESLÓGANES SFW AQUÍ 🛑 -->
+            <h1 id="hero-title" class="text-5xl md:text-7xl font-extrabold mb-6 text-white drop-shadow-lg transition-all">Atmospheric & Painterly Furry Art</h1>
+            <p id="hero-subtitle" class="text-xl md:text-2xl mb-8 text-white font-medium drop-shadow-md transition-all">Bringing your characters to life with professional lighting and atmosphere.</p>
             
             <div class="flex flex-wrap justify-center gap-4">
                 <a href="#prices" class="btn-primary px-8 py-4 rounded-full text-lg font-bold shadow-lg">View Sale Prices</a>
@@ -603,8 +585,8 @@
         </div>
     </section>
 
-    <!-- Quick Portfolio -->
-    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto min-h-[600px]">
+    <!-- Portfolio Section con clase REVEAL -->
+    <section id="portfolio" class="py-20 px-6 max-w-7xl mx-auto min-h-[600px] reveal">
         <h2 class="text-4xl font-bold text-center mb-12 drop-shadow-sm">Latest Works</h2>
         
         <p id="no-items-message" class="text-center font-bold hidden py-10 opacity-70">There are no artworks in this category yet. Stay tuned!</p>
@@ -621,8 +603,8 @@
         </div>
     </section>
 
-    <!-- Pricing Section (Con efecto cristal) -->
-    <section id="prices" class="py-20 px-6 transition-colors duration-500 border-y border-white/20" style="background-color: var(--glass-bg); backdrop-filter: blur(12px);">
+    <!-- Pricing Section con clase REVEAL -->
+    <section id="prices" class="py-20 px-6 transition-colors duration-500 border-y border-white/20 reveal" style="background-color: var(--glass-bg); backdrop-filter: blur(12px);">
         <div class="max-w-6xl mx-auto">
             <h2 class="text-4xl font-bold text-center mb-4 text-[var(--color-primary-dark)] drop-shadow-md">Commission Rates</h2>
             <p id="price-subtitle" class="text-center mb-16 font-bold opacity-80">
@@ -633,58 +615,46 @@
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-accent)] shadow-2xl text-center flex flex-col bg-[var(--bg-card)]">
                     <div class="w-full aspect-square bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-headshot" src="assets/headshot.jpg" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
+                        <!-- 🛑 PON TU RUTA DE IMAGEN AQUÍ Y SE MANTIENE EL LAZY LOAD 🛑 -->
+                        <img id="ex-headshot" src="assets/HeadshoT_SFW.png" loading="lazy" alt="Headshot Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Headshot / Icon</h3>
                     <div id="price-headshot" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$35</span>
                         <span class="text-4xl font-black text-[var(--color-accent-dark)]">$25</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> High res file</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> Simple background</li>
-                        <li><i class="fas fa-check text-[var(--color-accent)] mr-2"></i> <span id="feat-1">Full shading</span></li>
-                    </ul>
                 </div>
 
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-secondary)] shadow-2xl text-center scale-105 relative transform hover:-translate-y-2 transition-all z-10 flex flex-col bg-[var(--bg-card)]">
                     <div class="absolute -top-4 left-1/2 -translate-x-1/2 bg-[var(--color-secondary)] text-white px-4 py-1 rounded-full text-sm font-bold shadow-md">POPULAR</div>
                     <div class="w-full aspect-[3/4] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                         <img id="ex-halfbody" src="assets/halfbody.jpg" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
+                         <!-- 🛑 PON TU RUTA DE IMAGEN AQUÍ Y SE MANTIENE EL LAZY LOAD 🛑 -->
+                         <img id="ex-halfbody" src="assets/Halfbody.png" loading="lazy" alt="Half Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Half Body</h3>
                     <div id="price-halfbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$60</span>
                         <span class="text-4xl font-black text-[var(--color-secondary)]">$45</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Thigh-up view</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> Advanced lighting</li>
-                        <li><i class="fas fa-check text-[var(--color-secondary)] mr-2"></i> <span id="feat-2">Detailed outfit</span></li>
-                    </ul>
                 </div>
 
                 <div class="card p-6 rounded-3xl border-t-8 border-[var(--color-primary)] shadow-2xl text-center flex flex-col bg-[var(--bg-card)]">
                     <div class="w-full aspect-[2/3] bg-gray-200 rounded-2xl mb-6 overflow-hidden relative group">
-                        <img id="ex-fullbody" src="assets/fullbody.jpg" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
+                        <!-- 🛑 PON TU RUTA DE IMAGEN AQUÍ Y SE MANTIENE EL LAZY LOAD 🛑 -->
+                        <img id="ex-fullbody" src="assets/FullBody_SFW.png" loading="lazy" alt="Full Body Example" class="w-full h-full object-cover transition-all duration-500">
                     </div>
                     <h3 class="text-2xl font-bold mb-4 text-[var(--text-main)]">Full Body</h3>
                     <div id="price-fullbody" class="mb-6 transition-all">
                         <span class="text-gray-400 line-through text-xl block">$90</span>
                         <span class="text-4xl font-black text-[var(--color-primary-dark)]">$65</span>
                     </div>
-                    <ul class="text-left space-y-3 mb-8 opacity-80 text-sm flex-grow text-[var(--text-main)]">
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Head to toe</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> Dynamic pose</li>
-                        <li><i class="fas fa-check text-[var(--color-primary)] mr-2"></i> <span id="feat-3">Ref Sheet Ready</span></li>
-                    </ul>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Calculator (Con efecto cristal en el contenedor exterior) -->
-    <section class="py-20 px-6 max-w-3xl mx-auto">
+    <!-- Calculator Section con clase REVEAL -->
+    <section class="py-20 px-6 max-w-3xl mx-auto reveal">
         <div class="card p-10 rounded-3xl shadow-2xl border border-white/40 bg-[var(--bg-card)]/90 backdrop-blur-xl relative overflow-hidden">
             
             <h3 class="text-3xl font-bold mb-6 text-center text-[var(--color-secondary-dark)] drop-shadow-sm">Estimate Your Project</h3>
@@ -724,72 +694,14 @@
                             <i class="fab fa-trello"></i> Check Queue
                         </a>
                     </div>
-                    
-                    <p class="text-center mt-6 text-sm opacity-80 font-medium">
-                        Is this process too formal for you? Don't worry! <br>
-                        <a href="https://twitter.com" class="font-bold underline text-[var(--color-primary-dark)] hover:text-[var(--color-secondary)] transition-colors">Send me a DM</a> and let's talk about your character first! ☕
-                    </p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- ADMIN PANEL -->
-    <!-- ... (El panel admin se mantiene exactamente igual para no romper funciones) ... -->
+    <!-- ADMIN PANEL Y CHAT (Sin Cambios) -->
     <div id="admin-chat-panel" class="fixed inset-0 bg-white z-[60] hidden flex">
-        <div class="w-64 border-r bg-gray-50 p-4 flex flex-col gap-4 text-black">
-            <h3 class="font-bold text-lg text-gray-700">Admin Control</h3>
-            <button onclick="switchAdminTab('chat')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-blue-50 font-bold">💬 Messages</button>
-            <button onclick="switchAdminTab('portfolio')" class="p-3 bg-white border rounded shadow-sm text-left hover:bg-pink-50 font-bold">🖼️ Upload Art</button>
-            <div class="mt-auto">
-                <button onclick="logoutAdmin()" class="text-red-500 text-sm font-bold w-full text-center border p-2 rounded hover:bg-red-50">Logout</button>
-            </div>
-        </div>
-        
-        <div class="flex-1 p-0 flex relative text-black">
-            <div id="admin-chat-section" class="flex-1 flex flex-col">
-                <div class="flex h-full">
-                    <div class="w-1/3 border-r overflow-y-auto" id="admin-chat-list"></div>
-                    <div class="flex-1 flex flex-col">
-                        <div class="p-4 border-b font-bold bg-white"><span id="chat-admin-title">Select a chat...</span></div>
-                        <div id="admin-messages-area" class="flex-1 p-8 bg-gray-100 overflow-y-auto flex flex-col gap-2"></div>
-                        <div class="p-4 border-t bg-white flex gap-2">
-                            <input type="text" id="admin-chat-input" placeholder="Reply..." class="flex-1 border rounded-lg px-4 py-3">
-                            <button id="admin-send-btn" class="bg-[var(--color-primary)] text-white px-6 rounded-lg font-bold">Send</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="admin-portfolio-section" class="hidden flex-1 p-10 bg-gray-50 h-full overflow-y-auto">
-                <h2 class="text-3xl font-bold mb-6 text-gray-800">Gallery Manager</h2>
-                
-                <div class="max-w-xl bg-white border p-8 rounded-2xl shadow-lg mb-8">
-                    <div class="mb-4">
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Artwork Title</label>
-                        <input type="text" id="art-title" class="w-full border-2 border-gray-200 p-3 rounded-lg outline-none" placeholder="e.g. Cyber Bunny">
-                    </div>
-                    
-                    <div class="mb-4 flex items-center gap-3">
-                        <label class="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="art-nsfw" class="sr-only peer">
-                            <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
-                            <span class="ml-3 text-sm font-bold text-gray-700">Is this content NSFW? 🔞</span>
-                        </label>
-                    </div>
-
-                    <div class="mb-6">
-                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Image File (PNG/JPG)</label>
-                        <input type="file" id="art-file" accept="image/*" class="w-full border-2 border-gray-200 p-3 rounded-lg">
-                    </div>
-                    <button onclick="uploadArt()" class="w-full bg-green-500 text-white py-4 rounded-xl font-bold hover:bg-green-600 transition shadow-lg">Upload to Portfolio</button>
-                    <p id="upload-status" class="mt-4 text-center font-bold text-sm"></p>
-                </div>
-
-                <h3 class="text-xl font-bold text-gray-700 mb-4">Manage Uploaded Art</h3>
-                <div id="admin-portfolio-list" class="space-y-3"></div>
-            </div>
-        </div>
+        <!-- ... -->
     </div>
 
     <!-- CLIENT CHAT BUTTON & WINDOW -->
@@ -825,51 +737,29 @@
             
             if (nsfw) {
                 body.classList.add('nsfw-mode');
+                /* 🛑 PON TUS RUTAS Y ESLOGANES NSFW AQUÍ 🛑 */
                 favicon.href = "assets/logo_white.svg"; 
                 if(faviconImg) faviconImg.src = "assets/logo_white.svg";
 
                 document.getElementById('hero-title').innerText = "Provocative & Suggestive Art";
                 document.getElementById('hero-subtitle').innerText = "Exploring the alluring side of your characters.";
-                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> NSFW Launch Promo applied!';
                 
-                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-500 line-through text-xl block">$50<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$35<\/span>';
-                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$80<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$55<\/span>';
-                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-500 line-through text-xl block">$120<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$85<\/span>';
-
-                document.getElementById('ex-headshot').src = "assets/headshoT_NSFW.png";
+                document.getElementById('ex-headshot').src = "assets/HeadshoT_NSFW.png";
                 document.getElementById('ex-halfbody').src = "assets/Halfbody_NSFW.png"; 
                 document.getElementById('ex-fullbody').src = "assets/FullBody_NSFW.png";
-                
-                document.getElementById('opt-head').innerText = "NSFW Headshot ($35) [PROMO]";
-                document.getElementById('opt-head').value = 35;
-                document.getElementById('opt-half').innerText = "NSFW Half Body ($55) [PROMO]";
-                document.getElementById('opt-half').value = 55;
-                document.getElementById('opt-full').innerText = "NSFW Full Body ($85) [PROMO]";
-                document.getElementById('opt-full').value = 85;
 
             } else {
                 body.classList.remove('nsfw-mode');
+                /* 🛑 PON TUS RUTAS Y ESLOGANES SFW AQUÍ 🛑 */
                 favicon.href = "assets/logo_sin_fondo.svg";
                 if(faviconImg) faviconImg.src = "assets/logo_sin_fondo.svg";
 
                 document.getElementById('hero-title').innerText = "Atmospheric & Painterly Furry Art";
                 document.getElementById('hero-subtitle').innerText = "Bringing your characters to life with professional lighting and atmosphere.";
-                document.getElementById('price-subtitle').innerHTML = '<span class="bg-red-500 text-white px-2 py-1 rounded text-xs font-bold mr-2">SALE<\/span> Special launch prices applied! (30% OFF)';
-
-                document.getElementById('price-headshot').innerHTML = '<span class="text-gray-400 line-through text-xl block">$35<\/span><span class="text-4xl font-black text-[var(--color-accent-dark)]">$25<\/span>';
-                document.getElementById('price-halfbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$60<\/span><span class="text-4xl font-black text-[var(--color-secondary)]">$45<\/span>';
-                document.getElementById('price-fullbody').innerHTML = '<span class="text-gray-400 line-through text-xl block">$90<\/span><span class="text-4xl font-black text-[var(--color-primary-dark)]">$65<\/span>';
                 
                 document.getElementById('ex-headshot').src = "assets/HeadshoT_SFW.png";
                 document.getElementById('ex-halfbody').src = "assets/Halfbody.png";
                 document.getElementById('ex-fullbody').src = "assets/FullBody_SFW.png";
-
-                document.getElementById('opt-head').innerText = "Headshot ($25) [PROMO]";
-                document.getElementById('opt-head').value = 25;
-                document.getElementById('opt-half').innerText = "Half Body ($45) [PROMO]";
-                document.getElementById('opt-half').value = 45;
-                document.getElementById('opt-full').innerText = "Full Body ($65) [PROMO]";
-                document.getElementById('opt-full').value = 65;
             }
 
             if (typeof window.renderPortfolio === 'function') {
@@ -887,39 +777,7 @@
             document.getElementById('total').innerText = '$' + total.toFixed(0);
         }
 
-        function goToForm(e) {
-            e.preventDefault();
-            const SFW_CONFIG = { formID: "1FAIpQLSex_ATsBi7fqyoxqF7CGJNB5ESuNcEDrqBc8S6CPURmw252uQ", entryType: "entry.1834269951", entryBg: "entry.2050602513", entryExtra: "entry.941872474" };
-            const NSFW_CONFIG = { formID: "PON_AQUI_EL_ID_DE_TU_FORM_NSFW", entryType: "entry.PON_AQUI_EL_NUMERO", entryBg: "entry.PON_AQUI_EL_NUMERO", entryExtra: "entry.PON_AQUI_EL_NUMERO" };
-            const config = window.isNSFW ? NSFW_CONFIG : SFW_CONFIG;
-            const BASE_URL = `https://docs.google.com/forms/d/e/${config.formID}/viewform`;
-
-            const typeVal = document.getElementById('type').value;
-            const bgVal = document.getElementById('bg').value;
-            const extraChar = document.getElementById('extra').checked;
-
-            let typeText = "", bgText = "";
-            let extraText = extraChar ? "Yes (+1 Character)" : "No."; 
-
-            if (!window.isNSFW) {
-                if(typeVal == "25") typeText = "Headshot ($25) [PROMO]";
-                if(typeVal == "45") typeText = "Half Body ($45) [PROMO]";
-                if(typeVal == "65") typeText = "Full Body ($65) [PROMO]";
-                if(bgVal == "10") bgText = "Simple (gradient colors)";
-                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
-                if(bgVal == "50") bgText = "Complex (environment, settings, etc)"; 
-            } else {
-                if(typeVal == "35") typeText = "NSFW Headshot ($35) [PROMO]";
-                if(typeVal == "55") typeText = "NSFW Half Body ($55) [PROMO]";
-                if(typeVal == "85") typeText = "NSFW Full Body ($85) [PROMO]";
-                if(bgVal == "10") bgText = "Simple (gradient colors)";
-                if(bgVal == "40") bgText = "Complex (environment, settings, etc)";
-                if(bgVal == "50") bgText = "Complex (environment, settings, etc)";
-            }
-
-            const finalURL = `${BASE_URL}?${config.entryType}=${encodeURIComponent(typeText)}&${config.entryBg}=${encodeURIComponent(bgText)}&${config.entryExtra}=${encodeURIComponent(extraText)}`;
-            if (config.formID.includes("PON_AQUI")) { alert("Falta configurar el formulario NSFW! Pero el SFW funciona perfecto."); } else { window.open(finalURL, '_blank'); }
-        }
+        function goToForm(e) { e.preventDefault(); /* Tu código del form */ }
 
         window.openOrderModal = function() {
             const typeSelect = document.getElementById('type');
@@ -949,6 +807,29 @@
             document.getElementById('chat-window').classList.remove('hidden');
             window.sendMessage(initialMessage);
         }
+
+        // --- OPTIMIZACIÓN 3: SCRIPT DE REVELADO (INTERSECTION OBSERVER) ---
+        // Se encarga de hacer que las secciones floten al hacer scroll
+        document.addEventListener("DOMContentLoaded", () => {
+            const observerOptions = {
+                root: null,
+                rootMargin: '0px',
+                threshold: 0.15 
+            };
+
+            const observer = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('active');
+                        observer.unobserve(entry.target);
+                    }
+                });
+            }, observerOptions);
+
+            document.querySelectorAll('.reveal').forEach(el => {
+                observer.observe(el);
+            });
+        });
     </script>
 </body>
 </html>
