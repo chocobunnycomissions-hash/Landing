@@ -15,11 +15,7 @@
     <!-- MÓDULO DE CHAT, FIREBASE Y PORTAFOLIO -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { 
-                  getFirestore, collection, addDoc, deleteDoc, doc,
-                  onSnapshot, serverTimestamp,
-                  query, orderBy, limit
-                } from "firebase/firestore";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, setDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
         // --- ⚙️ CONFIGURACIÓN DE FIREBASE ---
@@ -42,10 +38,6 @@
 
         let currentUser = null;
         let currentChatId = null;
-        // --- LISTENERS GLOBALES---
-        let unsubscribeAdminChat = null;
-        let unsubscribeMessages = null;
-        let unsubscribeClientChat = null;
 
         // --- ESTADO GLOBAL DE LA GALERÍA ---
         window.portfolioItemsToShow = 3; 
@@ -87,11 +79,7 @@
 
         // --- CARGA DINÁMICA DE PORTAFOLIO (FIREBASE) ---
         function setupPortfolioListener() {
-            const q = query(
-                            collection(db, "portfolio"),
-                            orderBy("createdAt", "desc"),
-                            limit(12)
-                            );
+            const q = query(collection(db, "portfolio"), orderBy("createdAt", "desc"));
             onSnapshot(q, (snapshot) => {
                 window.firebaseItems = [];
                 const allItemsForAdmin = []; 
@@ -355,23 +343,14 @@
             document.getElementById('chat-trigger-btn').classList.add('hidden'); 
             
             const q = query(collection(db, "chats"), orderBy("lastMessageTime", "desc"));
-        
-            // 🔥 Cancelar listener anterior si existe
-            if (unsubscribeAdminChat) unsubscribeAdminChat();
-        
-            // 🔥 Guardar el nuevo listener
-            unsubscribeAdminChat = onSnapshot(q, (snapshot) => {
+            onSnapshot(q, (snapshot) => {
                 const list = document.getElementById('admin-chat-list');
                 list.innerHTML = '';
-        
                 snapshot.forEach(docSnap => {
                     const chat = docSnap.data();
                     const div = document.createElement('div');
                     div.className = `p-4 border-b cursor-pointer hover:bg-gray-100 ${chat.unread ? 'bg-blue-50 border-l-4 border-blue-400' : ''}`;
-                    div.innerHTML = `
-                        <p class="font-bold">${chat.clientName}</p>
-                        <p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>
-                    `;
+                    div.innerHTML = `<p class="font-bold">${chat.clientName}</p><p class="text-xs text-gray-500 truncate">${chat.lastMessage}</p>`;
                     div.onclick = () => loadAdminChat(docSnap.id, chat.clientName);
                     list.appendChild(div);
                 });
@@ -382,41 +361,17 @@
             currentChatId = id;
             document.getElementById('chat-admin-title').innerText = "Chat con: " + name;
             const area = document.getElementById('admin-messages-area');
-        
-            const q = query(
-                collection(db, "chats", id, "messages"),
-                orderBy("timestamp", "asc")
-            );
-        
-            // 🔥 Cancelar listener anterior
-            if (unsubscribeMessages) unsubscribeMessages();
-        
-            // 🔥 Guardar el nuevo listener
-            unsubscribeMessages = onSnapshot(q, (snapshot) => {
+            
+            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            onSnapshot(q, (snapshot) => {
                 area.innerHTML = '';
-        
-                const fragment = document.createDocumentFragment();
-        
                 snapshot.forEach(d => {
                     const m = d.data();
                     const isMe = m.senderId === ADMIN_UID;
-        
-                    const wrapper = document.createElement("div");
-                    wrapper.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2`;
-        
-                    const bubble = document.createElement("div");
-                    bubble.className = `${isMe 
-                        ? 'bg-pink-500 text-white' 
-                        : 'bg-white border border-gray-200'} 
-                        px-3 py-2 rounded-lg text-sm shadow-sm`;
-        
-                    bubble.textContent = m.text;
-        
-                    wrapper.appendChild(bubble);
-                    fragment.appendChild(wrapper);
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-pink-500 text-white' : 'bg-white border border-gray-200'} px-3 py-2 rounded-lg text-sm shadow-sm">${m.text}</div>
+                    </div>`;
                 });
-        
-                area.appendChild(fragment);
                 area.scrollTop = area.scrollHeight;
             });
         };
@@ -463,41 +418,17 @@
         };
 
         function listenToChat(id) {
-
-            const q = query(
-                collection(db, "chats", id, "messages"),
-                orderBy("timestamp", "asc")
-            );
-        
-            // 🔥 Cancelar listener anterior si existe
-            if (unsubscribeClientChat) unsubscribeClientChat();
-        
-            // 🔥 Guardar nuevo listener
-            unsubscribeClientChat = onSnapshot(q, (snapshot) => {
+            const q = query(collection(db, "chats", id, "messages"), orderBy("timestamp", "asc"));
+            onSnapshot(q, (snapshot) => {
                 const area = document.getElementById('chat-messages');
                 area.innerHTML = '';
-        
-                const fragment = document.createDocumentFragment();
-        
                 snapshot.forEach(d => {
                     const m = d.data();
                     const isMe = m.senderId === currentUser.uid;
-        
-                    const wrapper = document.createElement("div");
-                    wrapper.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2`;
-        
-                    const bubble = document.createElement("div");
-                    bubble.className = isMe
-                        ? 'bg-[var(--color-secondary)] text-white px-3 py-2 rounded-lg text-sm'
-                        : 'bg-gray-100 text-gray-800 px-3 py-2 rounded-lg text-sm';
-        
-                    bubble.textContent = m.text;
-        
-                    wrapper.appendChild(bubble);
-                    fragment.appendChild(wrapper);
+                    area.innerHTML += `<div class="flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2">
+                        <div class="${isMe ? 'bg-[var(--color-secondary)] text-white' : 'bg-gray-100 text-gray-800'} px-3 py-2 rounded-lg text-sm">${m.text}</div>
+                    </div>`;
                 });
-        
-                area.appendChild(fragment);
                 area.scrollTop = area.scrollHeight;
             });
         }
